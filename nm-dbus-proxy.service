@@ -1,0 +1,20 @@
+[Unit]
+After=dbus.service network-pre.target
+Before=network.target
+BindsTo=dbus.service
+Description=NetworkManger D-Bus proxy
+Wants=network.target
+
+[Service]
+BusName=org.freedesktop.NetworkManager
+ExecStart=/usr/bin/nm-dbus-proxy
+KillMode=process
+ProtectHome=true
+ProtectSystem=true
+Restart=on-failure
+Type=dbus
+
+[Install]
+WantedBy=multi-user.target
+Alias=dbus-org.freedesktop.network1.service
+

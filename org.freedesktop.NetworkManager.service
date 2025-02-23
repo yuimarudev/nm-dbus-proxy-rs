@@ -1,0 +1,8 @@
+# see: https://dbus.freedesktop.org/doc/dbus-specification.html#message-bus-starting-services
+
+[D-BUS Service]
+Name=org.freedesktop.NetworkManager
+Exec=/usr/bin/nm-dbus-proxy
+SystemdService=dbus-org.freedesktop.NetworkManager.service
+User=root
+
