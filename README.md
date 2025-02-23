@@ -26,6 +26,8 @@ D-Bus service that implements the [NetworkManager][1] D-Bus API, but interacting
 - [ ] map enough NetworkManager to system-networkd for [cosmic-greeter][5] to display one-off network status
 - [ ] map enough NetworkManager to system-networkd for [cosmic-applets][4] to display live network status
 - [ ] map enough NetworkManager to system-networkd for [cosmic-greeter][5] to display live network status
+- [ ] map enough NetworkManager to system-networkd for [cosmic-applets][4] to toggle airplane mode
+- [ ] map enough NetworkManager to system-networkd for [cosmic-applets][4] to toggle Wi-Fi
 - [ ] improve the installation process, i.e. provide scripts and/or distribution packages
 - [ ] every read-only NetworkManager API mapped to [systemd-networkd][3] underneath
 - [ ] every read+write NetworkManager API mapped to [systemd-networkd][3] underneath

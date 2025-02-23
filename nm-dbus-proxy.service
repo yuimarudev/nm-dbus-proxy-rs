@@ -3,6 +3,7 @@ After=dbus.service network-pre.target
 Before=network.target
 BindsTo=dbus.service
 Description=NetworkManger D-Bus proxy
+StartLimitIntervalSec=0
 Wants=network.target
 
 [Service]
