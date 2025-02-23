@@ -15,8 +15,6 @@ D-Bus service that implements the [NetworkManager][1] D-Bus API, but interacting
 - [ ] every read-only NetworkManager API mapped to [systemd-networkd][3] underneath
 - [ ] every read+write NetworkManager API mapped to [systemd-networkd][3] underneath
 
-## see also
-
-- [1]: https://www.networkmanager.dev/
-- [2]: https://systemd.io/
-- [3]: https://www.freedesktop.org/software/systemd/man/latest/systemd-networkd.html
+[1]: https://www.networkmanager.dev/
+[2]: https://systemd.io/
+[3]: https://www.freedesktop.org/software/systemd/man/latest/systemd-networkd.html
