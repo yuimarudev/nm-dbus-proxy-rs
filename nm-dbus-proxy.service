@@ -13,8 +13,9 @@ ProtectHome=true
 ProtectSystem=true
 Restart=on-failure
 Type=dbus
+User=nobody
 
 [Install]
 WantedBy=multi-user.target
-Alias=dbus-org.freedesktop.network1.service
+Alias=dbus-org.freedesktop.NetworkManager.service
 

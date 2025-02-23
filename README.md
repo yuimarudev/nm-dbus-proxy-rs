@@ -12,13 +12,20 @@ D-Bus service that implements the [NetworkManager][1] D-Bus API, but interacting
 
 ## installation
 
-1. `cargo build --release` and copy target/release/nm-dbus-proxy to /usr/bin/nm-dbus-proxy
-1. copy nm-dbus-proxy.service to /usr/lib/systemd/system/nm-dbus-proxy.service
-1. copy org.freedesktop.NetworkManager.service to /usr/share/dbus-1/system-services/org.free.desktop.NetworkManager.service
+1. `cargo build --release` and copy target/release/nm-dbus-proxy to /usr/bin/
+1. copy nm-dbus-proxy.service to /usr/lib/systemd/system/
+1. `systemctl daemon-reload` and `systemctl enable nm-dbus-proxy.service`
+1. copy org.freedesktop.NetworkManager.conf to /usr/share/dbus-1/system.d/
+1. copy org.freedesktop.NetworkManager.service to /usr/share/dbus-1/system-services/
 1. reboot
 
 ## TODO
 
+- [x] automatically activate on-demand (when "installation" process is completed)
+- [ ] map enough NetworkManager to system-networkd for [cosmic-applets][4] to display one-off network status
+- [ ] map enough NetworkManager to system-networkd for [cosmic-greeter][5] to display one-off network status
+- [ ] map enough NetworkManager to system-networkd for [cosmic-applets][4] to display live network status
+- [ ] map enough NetworkManager to system-networkd for [cosmic-greeter][5] to display live network status
 - [ ] improve the installation process, i.e. provide scripts and/or distribution packages
 - [ ] every read-only NetworkManager API mapped to [systemd-networkd][3] underneath
 - [ ] every read+write NetworkManager API mapped to [systemd-networkd][3] underneath
@@ -26,3 +33,5 @@ D-Bus service that implements the [NetworkManager][1] D-Bus API, but interacting
 [1]: https://www.networkmanager.dev/
 [2]: https://systemd.io/
 [3]: https://www.freedesktop.org/software/systemd/man/latest/systemd-networkd.html
+[4]: https://github.com/pop-os/cosmic-applets
+[5]: https://github.com/pop-os/cosmic-greeter

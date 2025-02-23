@@ -4,5 +4,5 @@
 Name=org.freedesktop.NetworkManager
 Exec=/usr/bin/nm-dbus-proxy
 SystemdService=dbus-org.freedesktop.NetworkManager.service
-User=root
+User=nobody
 
