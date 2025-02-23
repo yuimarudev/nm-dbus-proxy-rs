@@ -11,3 +11,18 @@ sast:
   stage: test
 include:
 - template: Security/SAST.gitlab-ci.yml
+
+rust:
+  before_script:
+    - apk update
+    - apk add just
+    - apk add musl-dev # needed for the musl toolchain for rustc
+  cache:
+    untracked: true
+  image:
+    name: rust:alpine
+  script:
+    - just test
+  stage: test
+  timeout: 1h
+

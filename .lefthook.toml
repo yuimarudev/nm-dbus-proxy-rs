@@ -1,0 +1,14 @@
+[pre-commit]
+follow = true
+
+[pre-commit.commands]
+fmt = { run = "just fmt" }
+
+[prepare-commit-msg.commands]
+gimoji = { interactive = true, run = "gimoji --hook {1} {2} || true", use_stdin = true }
+
+[pre-push]
+follow = true
+
+[pre-push.commands]
+test = { run = "just test" }
