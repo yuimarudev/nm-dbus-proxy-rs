@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use network_manager::NetworkManager;
 use zbus::{
     conn::Builder,
     interface,
@@ -10,11 +11,9 @@ use zbus::{
 };
 
 mod enums;
+mod network_manager;
 
-use enums::{
-    NMActivationStateFlags, NMActiveConnectionState, NMConnectivityState, NMDeviceState,
-    NMDeviceType,
-};
+use enums::{NMActivationStateFlags, NMActiveConnectionState, NMDeviceState, NMDeviceType};
 
 struct ActiveConnection;
 
@@ -111,31 +110,6 @@ impl Ip4Config {
             (String::from("address"), String::from("1.2.3.4")),
             (String::from("prefix"), String::from("32")),
         ])]
-    }
-}
-
-/// see: [NetworkManager](https://www.networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.html)
-struct NetworkManager;
-
-#[interface(name = "org.freedesktop.NetworkManager")]
-impl NetworkManager {
-    #[zbus(property)]
-    fn active_connections(&self) -> Vec<OwnedObjectPath> {
-        vec![
-            ObjectPath::try_from("/org/freedesktop/NetworkManager/ActiveConnection/1")
-                .expect("should parse into D-Bus object path")
-                .into(),
-        ]
-    }
-
-    #[zbus(out_args("connectivity"))]
-    fn check_connectivity(&self) -> u32 {
-        NMConnectivityState::Full as u32
-    }
-
-    #[zbus(property)]
-    fn connectivity(&self) -> u32 {
-        NMConnectivityState::Full as u32
     }
 }
 
