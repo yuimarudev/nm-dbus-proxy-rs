@@ -1,11 +1,12 @@
 #![deny(clippy::all, clippy::pedantic, unsafe_code)]
 #![allow(clippy::unused_self)]
 
-use std::collections::HashMap;
+use std::{collections::HashMap, future::pending};
 
 use clap::Parser;
 use network_manager::NetworkManager;
 use zbus::{
+    Address,
     conn::Builder,
     interface,
     zvariant::{ObjectPath, OwnedObjectPath},
@@ -115,18 +116,32 @@ impl Ip4Config {
 }
 
 #[derive(Clone, Debug, Parser, PartialEq, Eq)]
-#[command(about, version)]
-struct Args;
+#[command(about, long_about = None, version)]
+struct Args {
+    /// D-Bus bus for exposing `NetworkManager` API (uses system bus by default)
+    #[arg(long)]
+    service_bus: Option<Address>,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), zbus::Error> {
+    let args = Args::parse();
+
     let ac = ActiveConnection;
     let d = Device;
     let dw = DeviceWired;
     let ip4 = Ip4Config;
     let nm = NetworkManager;
 
-    let _conn = Builder::system()?
+    let _networkd_bus = Builder::system()?.build().await?;
+
+    let service_bus = if let Some(some) = args.service_bus {
+        Builder::address(some)?
+    } else {
+        Builder::system()?
+    };
+
+    let _service_bus = service_bus
         .name("org.freedesktop.NetworkManager")?
         .serve_at("/org/freedesktop/NetworkManager", nm)?
         .serve_at("/org/freedesktop/NetworkManager/ActiveConnection/1", ac)?
@@ -135,6 +150,8 @@ async fn main() -> Result<(), zbus::Error> {
         .serve_at("/org/freedesktop/NetworkManager/IP4Config/1", ip4)?
         .build()
         .await?;
+
+    pending::<()>().await;
 
     Ok(())
 }
