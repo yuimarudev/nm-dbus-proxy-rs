@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 
+use clap::Parser;
 use network_manager::NetworkManager;
 use zbus::{
     conn::Builder,
@@ -112,6 +113,10 @@ impl Ip4Config {
         ])]
     }
 }
+
+#[derive(Clone, Debug, Parser, PartialEq, Eq)]
+#[command(about, version)]
+struct Args;
 
 #[tokio::main]
 async fn main() -> Result<(), zbus::Error> {
