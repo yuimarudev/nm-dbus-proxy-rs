@@ -198,7 +198,9 @@ impl NetworkManager {
     /// Capabilities property
     #[zbus(property)]
     fn capabilities(&self) -> Vec<u32> {
-        todo!()
+        // see: https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMCapability
+        // for now, hard-code that we do not implement the team or OVS device plugins
+        vec![]
     }
 
     /// Checkpoints property
