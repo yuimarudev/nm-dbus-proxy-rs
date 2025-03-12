@@ -83,3 +83,10 @@ pub enum NMDeviceType {
     Loopback = 32,
     Hsr = 33,
 }
+
+/// see: [NMRadioFlags]( https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMRadioFlags )
+pub enum NMRadioFlags {
+    None = 0,
+    WlanAvailable = 1,
+    WwanAvailable = 2,
+}

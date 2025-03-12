@@ -1,11 +1,13 @@
+use std::collections::HashMap;
+
 use zbus::{
     interface,
-    zvariant::{ObjectPath, OwnedObjectPath},
+    zvariant::{ObjectPath, OwnedObjectPath, OwnedValue},
 };
 
-use crate::enums::NMConnectivityState;
+use crate::enums::{NMConnectivityState, NMRadioFlags};
 
-/// see: [NetworkManager](https://www.networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.html)
+/// see: [NetworkManager]( https://www.networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.html )
 pub struct NetworkManager;
 
 #[interface(name = "org.freedesktop.NetworkManager")]
@@ -176,7 +178,9 @@ impl NetworkManager {
     /// ActivatingConnection property
     #[zbus(property)]
     fn activating_connection(&self) -> OwnedObjectPath {
-        todo!()
+        ObjectPath::try_from("/org/freedesktop/NetworkManager/ActiveConnection/1")
+            .expect("should parse into D-Bus object path")
+            .into()
     }
 
     /// ActiveConnections property
@@ -192,7 +196,11 @@ impl NetworkManager {
     /// AllDevices property
     #[zbus(property)]
     fn all_devices(&self) -> Vec<OwnedObjectPath> {
-        todo!()
+        vec![
+            ObjectPath::try_from("/org/freedesktop/NetworkManager/Devices/eth0")
+                .expect("should parse into D-Bus object path")
+                .into(),
+        ]
     }
 
     /// Capabilities property
@@ -206,7 +214,9 @@ impl NetworkManager {
     /// Checkpoints property
     #[zbus(property)]
     fn checkpoints(&self) -> Vec<OwnedObjectPath> {
-        todo!()
+        // see: https://networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.Checkpoint.html
+        // for now, we won't implement state rollbacks, etc
+        vec![]
     }
 
     /// Connectivity property
@@ -218,13 +228,15 @@ impl NetworkManager {
     /// ConnectivityCheckAvailable property
     #[zbus(property)]
     fn connectivity_check_available(&self) -> bool {
-        todo!()
+        // TODO: wire this up to systemd-networkd 's connectivity check
+        false
     }
 
     /// ConnectivityCheckEnabled property
     #[zbus(property)]
     fn connectivity_check_enabled(&self) -> bool {
-        todo!()
+        // TODO: wire this up to systemd-networkd 's connectivity check
+        false
     }
     // #[zbus(property)]
     // fn set_connectivity_check_enabled(&self, value: bool) -> zbus::Result<()> {
@@ -234,21 +246,25 @@ impl NetworkManager {
     /// ConnectivityCheckUri property
     #[zbus(property)]
     fn connectivity_check_uri(&self) -> String {
-        todo!()
+        // TODO: wire this up to systemd-networkd 's connectivity check
+        String::new()
     }
 
     /// Devices property
     #[zbus(property)]
     fn devices(&self) -> Vec<OwnedObjectPath> {
-        todo!()
+        vec![
+            ObjectPath::try_from("/org/freedesktop/NetworkManager/Devices/eth0")
+                .expect("should parse into D-Bus object path")
+                .into(),
+        ]
     }
 
     /// GlobalDnsConfiguration property
     #[zbus(property)]
-    fn global_dns_configuration(
-        &self,
-    ) -> std::collections::HashMap<String, zbus::zvariant::OwnedValue> {
-        todo!()
+    fn global_dns_configuration(&self) -> HashMap<String, OwnedValue> {
+        // TODO: wire this up to systemd-resolved
+        HashMap::new()
     }
     // #[zbus(property)]
     // fn set_global_dns_configuration(
@@ -261,37 +277,46 @@ impl NetworkManager {
     /// Metered property
     #[zbus(property)]
     fn metered(&self) -> u32 {
-        todo!()
+        // systemd-networkd doesn't seem to provide this?
+        // see: https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMMetered
+        // NM_METERED_UNKNOWN => 0
+        0
     }
 
     /// NetworkingEnabled property
     #[zbus(property)]
     fn networking_enabled(&self) -> bool {
-        todo!()
+        // systemd-networkd doesn't seem to provide this?
+        true
     }
 
     /// PrimaryConnection property
     #[zbus(property)]
     fn primary_connection(&self) -> OwnedObjectPath {
-        todo!()
+        ObjectPath::try_from("/org/freedesktop/NetworkManager/ActiveConnection/1")
+            .expect("should parse into D-Bus object path")
+            .into()
     }
 
     /// PrimaryConnectionType property
     #[zbus(property)]
     fn primary_connection_type(&self) -> String {
-        todo!()
+        // TODO: figure out which values are valid/expected here
+        String::from("ethernet")
     }
 
     /// RadioFlags property
     #[zbus(property)]
     fn radio_flags(&self) -> u32 {
-        todo!()
+        // TODO: wire this up to systemd-networkd
+        NMRadioFlags::WlanAvailable as u32
     }
 
     /// Startup property
     #[zbus(property)]
     fn startup(&self) -> bool {
-        todo!()
+        // TODO: begin with `true` and toggle when ready
+        false
     }
 
     // /// State property
@@ -303,19 +328,21 @@ impl NetworkManager {
     /// Version property
     #[zbus(property)]
     fn version(&self) -> String {
-        todo!()
+        String::from("1.52.0")
     }
 
     /// VersionInfo property
     #[zbus(property)]
     fn version_info(&self) -> Vec<u32> {
-        todo!()
+        // see: https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMVersionInfoCapability
+        vec![((1 << 16) | (52 << 8)), 0]
     }
 
     /// WimaxEnabled property
     #[zbus(property)]
     fn wimax_enabled(&self) -> bool {
-        todo!()
+        // systemd-networkd doesn't seem to provide this?
+        true
     }
     // #[zbus(property)]
     // fn set_wimax_enabled(&self, value: bool) -> zbus::Result<()> {
@@ -325,13 +352,15 @@ impl NetworkManager {
     /// WimaxHardwareEnabled property
     #[zbus(property)]
     fn wimax_hardware_enabled(&self) -> bool {
-        todo!()
+        // systemd-networkd doesn't seem to provide this?
+        true
     }
 
     /// WirelessEnabled property
     #[zbus(property)]
     fn wireless_enabled(&self) -> bool {
-        todo!()
+        // systemd-networkd doesn't seem to provide this?
+        true
     }
     // #[zbus(property)]
     // fn set_wireless_enabled(&self, value: bool) -> zbus::Result<()> {
@@ -341,13 +370,15 @@ impl NetworkManager {
     /// WirelessHardwareEnabled property
     #[zbus(property)]
     fn wireless_hardware_enabled(&self) -> bool {
-        todo!()
+        // systemd-networkd doesn't seem to provide this?
+        true
     }
 
     /// WwanEnabled property
     #[zbus(property)]
     fn wwan_enabled(&self) -> bool {
-        todo!()
+        // systemd-networkd doesn't seem to provide this?
+        true
     }
     // #[zbus(property)]
     // fn set_wwan_enabled(&self, value: bool) -> zbus::Result<()> {
@@ -357,6 +388,7 @@ impl NetworkManager {
     /// WwanHardwareEnabled property
     #[zbus(property)]
     fn wwan_hardware_enabled(&self) -> bool {
-        todo!()
+        // systemd-networkd doesn't seem to provide this?
+        true
     }
 }

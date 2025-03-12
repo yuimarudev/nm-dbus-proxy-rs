@@ -30,7 +30,6 @@ pub async fn start_service(address: Option<Address>) -> Result<Connection, zbus:
         .name("org.freedesktop.NetworkManager")?
         .serve_at("/org/freedesktop/NetworkManager", nm)?
         .serve_at("/org/freedesktop/NetworkManager/ActiveConnection/1", ac)?
-        .serve_at("/org/freedesktop/NetworkManager/Devices/1", d)?
         .serve_at("/org/freedesktop/NetworkManager/Devices/eth0", dw)?
         .serve_at("/org/freedesktop/NetworkManager/IP4Config/1", ip4)?
         .build()
@@ -45,7 +44,7 @@ impl ActiveConnection {
     #[zbus(property)]
     fn devices(&self) -> Vec<OwnedObjectPath> {
         vec![
-            ObjectPath::try_from("/org/freedesktop/NetworkManager/Devices/1")
+            ObjectPath::try_from("/org/freedesktop/NetworkManager/Devices/eth0")
                 .expect("should parse into D-Bus object path")
                 .into(),
         ]
