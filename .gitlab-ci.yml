@@ -15,6 +15,7 @@ include:
 rust:
   before_script:
     - apk update
+    - apk add dbus # needed for integration tests
     - apk add just
     - apk add musl-dev # needed for the musl toolchain for rustc
   cache:
