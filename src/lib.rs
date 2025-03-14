@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use network_manager::NetworkManager;
+use network_manager::{NetworkManager, active_connection::ActiveConnection};
 use zbus::{
     Address, Connection,
     conn::Builder,
@@ -11,14 +11,32 @@ use zbus::{
 mod enums;
 mod network_manager;
 
-use enums::{NMActivationStateFlags, NMActiveConnectionState, NMDeviceState, NMDeviceType};
+use enums::{NMDeviceState, NMDeviceType};
+use zbus_systemd::network1::ManagerProxy;
 
 pub async fn start_service(address: Option<Address>) -> Result<Connection, zbus::Error> {
-    let ac = ActiveConnection;
+    let system_bus = Builder::system()?.build().await?;
+    let manager = ManagerProxy::new(&system_bus).await?;
+
+    let links = manager.list_links().await?;
+
     let d = Device;
     let dw = DeviceWired;
     let ip4 = Ip4Config;
-    let nm = NetworkManager;
+    let nm = NetworkManager {
+        active_connections: links
+            .iter()
+            .map(|(_id, id, _path)| {
+                OwnedObjectPath::from(
+                    ObjectPath::try_from(format!(
+                        "/org/freedesktop/NetworkManager/ActiveConnections/{}",
+                        id
+                    ))
+                    .expect("should parse object path"),
+                )
+            })
+            .collect(),
+    };
 
     let service_bus = if let Some(some) = address {
         Builder::address(some)?
@@ -26,62 +44,37 @@ pub async fn start_service(address: Option<Address>) -> Result<Connection, zbus:
         Builder::system()?
     };
 
-    service_bus
-        .name("org.freedesktop.NetworkManager")?
-        .serve_at("/org/freedesktop/NetworkManager", nm)?
-        .serve_at("/org/freedesktop/NetworkManager/ActiveConnection/1", ac)?
-        .serve_at("/org/freedesktop/NetworkManager/Devices/eth0", d)?
-        .serve_at("/org/freedesktop/NetworkManager/Devices/eth0", dw)?
-        .serve_at("/org/freedesktop/NetworkManager/IP4Config/1", ip4)?
-        .build()
-        .await
+    let conn = service_bus.build().await?;
+
+    let server = conn.object_server();
+    server.at("/org/freedesktop/NetworkManager", nm).await?;
+
+    for (_i, id, _path) in links {
+        eprintln!("{_i:?} {id:?} {_path:?}");
+        let object_path = format!("/org/freedesktop/NetworkManager/ActiveConnections/{}", id);
+        server
+            .at(object_path.as_str(), ActiveConnection { id })
+            .await?;
+    }
+
+    server
+        .at("/org/freedesktop/NetworkManager/Devices/eth0", d)
+        .await?;
+    server
+        .at("/org/freedesktop/NetworkManager/Devices/eth0", dw)
+        .await?;
+    server
+        .at("/org/freedesktop/NetworkManager/IP4Config/1", ip4)
+        .await?;
+
+    conn.request_name("org.freedesktop.NetworkManager").await?;
+
+    Ok(conn)
 }
-
-struct ActiveConnection;
-
-/// see: [NetworkManager.Connection.Active](https://www.networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.Connection.Active.html)
-#[interface(name = "org.freedesktop.NetworkManager.Connection.Active")]
-impl ActiveConnection {
-    #[zbus(property)]
-    fn devices(&self) -> Vec<OwnedObjectPath> {
-        vec![
-            ObjectPath::try_from("/org/freedesktop/NetworkManager/Devices/eth0")
-                .expect("should parse into D-Bus object path")
-                .into(),
-        ]
-    }
-
-    #[zbus(property)]
-    fn id(&self) -> String {
-        String::from("1")
-    }
-
-    #[zbus(property)]
-    fn ip4_config(&self) -> OwnedObjectPath {
-        ObjectPath::try_from("/org/freedesktop/NetworkManager/IP4Config/1")
-            .expect("should parse into D-Bus object path")
-            .into()
-    }
-
-    #[zbus(property)]
-    fn state(&self) -> u32 {
-        NMActiveConnectionState::Activated as u32
-    }
-
-    #[zbus(property)]
-    fn state_flags(&self) -> u32 {
-        NMActivationStateFlags::None as u32
-    }
-
-    #[zbus(property)]
-    fn vpn(&self) -> bool {
-        false
-    }
-}
-
-struct Device;
 
 /// see: [Device](https://www.networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.Device.html)
+struct Device;
+
 #[interface(name = "org.freedesktop.NetworkManager.Device")]
 impl Device {
     #[zbus(property)]

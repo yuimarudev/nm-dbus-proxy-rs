@@ -5,10 +5,14 @@ use zbus::{
     zvariant::{ObjectPath, OwnedObjectPath, OwnedValue},
 };
 
+pub mod active_connection;
+
 use crate::enums::{NMConnectivityState, NMRadioFlags};
 
 /// see: [NetworkManager]( https://www.networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.html )
-pub struct NetworkManager;
+pub struct NetworkManager {
+    pub active_connections: Vec<OwnedObjectPath>,
+}
 
 #[interface(name = "org.freedesktop.NetworkManager")]
 impl NetworkManager {
@@ -186,11 +190,7 @@ impl NetworkManager {
     /// ActiveConnections property
     #[zbus(property)]
     fn active_connections(&self) -> Vec<OwnedObjectPath> {
-        vec![
-            ObjectPath::try_from("/org/freedesktop/NetworkManager/ActiveConnection/1")
-                .expect("should parse into D-Bus object path")
-                .into(),
-        ]
+        self.active_connections.clone()
     }
 
     /// AllDevices property

@@ -5,7 +5,7 @@ use std::future::pending;
 
 use clap::Parser;
 use nm_dbus_proxy::start_service;
-use zbus::{Address, conn::Builder};
+use zbus::Address;
 
 mod enums;
 mod network_manager;
@@ -21,8 +21,6 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<(), zbus::Error> {
     let args = Args::parse();
-
-    let _networkd_bus = Builder::system()?.build().await?;
 
     let _service_bus = start_service(args.service_bus).await?;
 

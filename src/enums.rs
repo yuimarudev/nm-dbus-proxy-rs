@@ -1,4 +1,5 @@
 /// see: [NMActivationStateFlags](https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMActivationStateFlags)
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NMActivationStateFlags {
     None = 0x0,
     IsController = 0x1,
