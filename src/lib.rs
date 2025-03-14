@@ -17,14 +17,11 @@ use zbus::{
 
 mod enums;
 mod network_manager;
-mod systemd_networkd;
+pub mod systemd_networkd;
 
 use enums::{NMDeviceState, NMDeviceStateReason, NMDeviceType};
 
-pub async fn start_service(address: Option<Address>) -> Result<Connection> {
-    let system_bus = Builder::system()?.build().await?;
-    let manager = Manager::request(&system_bus).await?;
-
+pub async fn start_service(address: Option<Address>, manager: Manager) -> Result<Connection> {
     let ip4 = Ip4Config;
 
     let service_bus = if let Some(some) = address {
