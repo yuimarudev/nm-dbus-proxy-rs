@@ -1,6 +1,13 @@
 use std::collections::HashMap;
 
-use network_manager::{NetworkManager, active_connection::ActiveConnection};
+use anyhow::Result;
+use network_manager::{
+    NetworkManager,
+    access_point::AccessPoint,
+    active_connection::ActiveConnection,
+    device::{Device, loopback::DeviceLoopback, wired::DeviceWired, wireless::DeviceWireless},
+};
+use systemd_networkd::Manager;
 use zbus::{
     Address, Connection,
     conn::Builder,
@@ -10,33 +17,15 @@ use zbus::{
 
 mod enums;
 mod network_manager;
+mod systemd_networkd;
 
-use enums::{NMDeviceState, NMDeviceType};
-use zbus_systemd::network1::ManagerProxy;
+use enums::{NMDeviceState, NMDeviceStateReason, NMDeviceType};
 
-pub async fn start_service(address: Option<Address>) -> Result<Connection, zbus::Error> {
+pub async fn start_service(address: Option<Address>) -> Result<Connection> {
     let system_bus = Builder::system()?.build().await?;
-    let manager = ManagerProxy::new(&system_bus).await?;
+    let manager = Manager::request(&system_bus).await?;
 
-    let links = manager.list_links().await?;
-
-    let d = Device;
-    let dw = DeviceWired;
     let ip4 = Ip4Config;
-    let nm = NetworkManager {
-        active_connections: links
-            .iter()
-            .map(|(_id, id, _path)| {
-                OwnedObjectPath::from(
-                    ObjectPath::try_from(format!(
-                        "/org/freedesktop/NetworkManager/ActiveConnections/{}",
-                        id
-                    ))
-                    .expect("should parse object path"),
-                )
-            })
-            .collect(),
-    };
 
     let service_bus = if let Some(some) = address {
         Builder::address(some)?
@@ -47,21 +36,92 @@ pub async fn start_service(address: Option<Address>) -> Result<Connection, zbus:
     let conn = service_bus.build().await?;
 
     let server = conn.object_server();
-    server.at("/org/freedesktop/NetworkManager", nm).await?;
 
-    for (_i, id, _path) in links {
-        eprintln!("{_i:?} {id:?} {_path:?}");
-        let object_path = format!("/org/freedesktop/NetworkManager/ActiveConnections/{}", id);
+    let mut active_connections = vec![];
+    let mut devices = vec![];
+    for link in manager.links {
+        let connection_path = format!(
+            "/org/freedesktop/NetworkManager/ActiveConnections/{}",
+            link.description.name
+        );
+        let connection_object_path = OwnedObjectPath::from(
+            ObjectPath::try_from(connection_path.as_str())
+                .expect("should parse active connection object path"),
+        );
+
+        let device_path = format!(
+            "/org/freedesktop/NetworkManager/Devices/{}",
+            link.description.name
+        );
+        let device_object_path = OwnedObjectPath::from(
+            ObjectPath::try_from(device_path.as_str()).expect("should parse device object path"),
+        );
+
         server
-            .at(object_path.as_str(), ActiveConnection { id })
+            .at(
+                connection_path.as_str(),
+                dbg!(ActiveConnection {
+                    devices: vec![device_object_path.clone()],
+                    id: link.description.name.clone(),
+                }),
+            )
             .await?;
+
+        let device_type = NMDeviceType::from((link.description.kind, link.description.r#type));
+        server
+            .at(
+                device_path.as_str(),
+                dbg!(Device {
+                    active_connection: connection_object_path.clone(),
+                    driver: link.description.driver.clone(),
+                    interface: link.description.name.clone(),
+                    ip_interface: link.description.name.clone(),
+                    mtu: link.description.mtu,
+                    path: link.description.name.clone(),
+                    state: NMDeviceState::Activated,
+                    state_reason: (NMDeviceState::Activated, NMDeviceStateReason::None),
+                    r#type: device_type,
+                    udi: link.description.name.clone(),
+                }),
+            )
+            .await?;
+
+        match device_type {
+            NMDeviceType::Loopback => {
+                server.at(device_path.as_str(), DeviceLoopback).await?;
+            }
+            NMDeviceType::Ethernet => {
+                server.at(device_path.as_str(), DeviceWired).await?;
+            }
+            NMDeviceType::Wifi => {
+                server.at(device_path.as_str(), DeviceWireless).await?;
+            }
+            _ => {
+                // TODO
+            }
+        }
+
+        active_connections.push(connection_object_path);
+        devices.push(device_object_path);
     }
 
     server
-        .at("/org/freedesktop/NetworkManager/Devices/eth0", d)
+        .at(
+            "/org/freedesktop/NetworkManager",
+            NetworkManager {
+                active_connections,
+                devices,
+            },
+        )
         .await?;
+
     server
-        .at("/org/freedesktop/NetworkManager/Devices/eth0", dw)
+        .at(
+            "/org/freedesktop/NetworkManager/AccessPoint/foo",
+            AccessPoint {
+                ssid: String::from("foo"),
+            },
+        )
         .await?;
     server
         .at("/org/freedesktop/NetworkManager/IP4Config/1", ip4)
@@ -70,48 +130,6 @@ pub async fn start_service(address: Option<Address>) -> Result<Connection, zbus:
     conn.request_name("org.freedesktop.NetworkManager").await?;
 
     Ok(conn)
-}
-
-/// see: [Device](https://www.networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.Device.html)
-struct Device;
-
-#[interface(name = "org.freedesktop.NetworkManager.Device")]
-impl Device {
-    #[zbus(property)]
-    fn device_type(&self) -> u32 {
-        NMDeviceType::Ethernet as u32
-    }
-
-    #[zbus(property)]
-    fn path(&self) -> String {
-        String::from("eth0")
-    }
-
-    #[zbus(property)]
-    fn state(&self) -> u32 {
-        NMDeviceState::Activated as u32
-    }
-}
-
-struct DeviceWired;
-
-/// see: [Device.Wired](https://www.networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.Device.Wired.html)
-#[interface(name = "org.freedesktop.NetworkManager.Device.Wired")]
-impl DeviceWired {
-    #[zbus(property)]
-    fn hw_address(&self) -> String {
-        String::from("01:23:45:67:89:AB")
-    }
-
-    #[zbus(property)]
-    fn perm_hw_address(&self) -> String {
-        String::from("01:23:45:67:89:AB")
-    }
-
-    #[zbus(property)]
-    fn speed(&self) -> u32 {
-        1000
-    }
 }
 
 struct Ip4Config;

@@ -3,12 +3,15 @@
 
 use std::future::pending;
 
+use anyhow::Result;
 use clap::Parser;
-use nm_dbus_proxy::start_service;
 use zbus::Address;
 
 mod enums;
 mod network_manager;
+mod systemd_networkd;
+
+use nm_dbus_proxy::start_service;
 
 #[derive(Clone, Debug, Parser, PartialEq, Eq)]
 #[command(about, long_about = None, version)]
@@ -19,7 +22,9 @@ struct Args {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), zbus::Error> {
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
+
     let args = Args::parse();
 
     let _service_bus = start_service(args.service_bus).await?;

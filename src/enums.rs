@@ -1,6 +1,22 @@
+use tracing::warn;
+
+use crate::systemd_networkd::link::{Kind, Type};
+
+/// [NM80211Mode]( https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NM80211Mode )
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum NM80211Mode {
+    #[default]
+    Unknown = 0,
+    Adhoc = 1,
+    Infra = 2,
+    Ap = 3,
+    Mesh = 4,
+}
+
 /// see: [NMActivationStateFlags](https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMActivationStateFlags)
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum NMActivationStateFlags {
+    #[default]
     None = 0x0,
     IsController = 0x1,
     IsPort = 0x2,
@@ -30,8 +46,22 @@ pub enum NMConnectivityState {
     Full = 4,
 }
 
-/// see: [NMDeviceState](https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMDeviceState)
+/// [NMDeviceInterfaceFlags]( https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMDeviceInterfaceFlags )
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum NMDeviceInterfaceFlags {
+    #[default]
+    None = 0,
+    Up = 0x1,
+    LowerUp = 0x2,
+    Promisc = 0x4,
+    Carrier = 0x10000,
+    LldpClientEnabled = 0x20000,
+}
+
+/// see: [NMDeviceState]( https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMDeviceState )
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum NMDeviceState {
+    #[default]
     Unknown = 0,
     Unmanaged = 10,
     Unavailable = 20,
@@ -47,8 +77,94 @@ pub enum NMDeviceState {
     Failed = 120,
 }
 
-/// see: [NMDeviceType](https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMDeviceType)
+/// [NMDeviceStateReason]( https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMDeviceStateReason )
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum NMDeviceStateReason {
+    None = 0,
+    #[default]
+    Unknown = 1,
+    NowManaged = 2,
+    NowUnmanaged = 3,
+    ConfigFailed = 4,
+    IpConfigUnavailable = 5,
+    IpConfigExpired = 6,
+    NoSecrets = 7,
+    SupplicantDisconnect = 8,
+    SupplicantConfigFailed = 9,
+    SupplicantFailed = 10,
+    SupplicantTimeout = 11,
+    PppStartFailed = 12,
+    PppDisconnect = 13,
+    PppFailed = 14,
+    DhcpStartFailed = 15,
+    DhcpError = 16,
+    DhcpFailed = 17,
+    SharedStartFailed = 18,
+    SharedFailed = 19,
+    AutoipStartFailed = 20,
+    AutoipError = 21,
+    AutoipFailed = 22,
+    ModemBusy = 23,
+    ModemNoDialTone = 24,
+    ModemNoCarrier = 25,
+    ModemDialTimeout = 26,
+    ModemDialFailed = 27,
+    ModemInitFailed = 28,
+    GsmApnFailed = 29,
+    GsmRegistrationNotSearching = 30,
+    GsmRegistrationDenied = 31,
+    GsmRegistrationTimeout = 32,
+    GsmRegistrationFailed = 33,
+    GsmPinCheckFailed = 34,
+    FirmwareMissing = 35,
+    Removed = 36,
+    Sleeping = 37,
+    ConnectionRemoved = 38,
+    UserRequested = 39,
+    Carrier = 40,
+    ConnectionAssumed = 41,
+    SupplicantAvailable = 42,
+    ModemNotFound = 43,
+    BtFailed = 44,
+    GsmSimNotInserted = 45,
+    GsmSimPinRequired = 46,
+    GsmSimPukRequired = 47,
+    GsmSimWrong = 48,
+    InfinibandMode = 49,
+    DependencyFailed = 50,
+    Br2684Failed = 51,
+    ModemManagerUnavailable = 52,
+    SsidNotFound = 53,
+    SecondaryConnectionFailed = 54,
+    DcbFcoeFailed = 55,
+    TeamdControlFailed = 56,
+    ModemFailed = 57,
+    ModemAvailable = 58,
+    SimPinIncorrect = 59,
+    NewActivation = 60,
+    ParentChanged = 61,
+    ParentManagedChanged = 62,
+    OvsdbFailed = 63,
+    IpAddressDuplicate = 64,
+    IpMethodUnsupported = 65,
+    SriovConfigurationFailed = 66,
+    PeerNotFound = 67,
+    DeviceHandlerFailed = 68,
+    UnmanagedByDefault = 69,
+    UnmanagedExternalDown = 70,
+    UnmanagedLinkNotInit = 71,
+    UnmanagedQuitting = 72,
+    UnmanagedSleeping = 73,
+    UnmanagedUserConf = 74,
+    UnmanagedUserExplicit = 75,
+    UnmanagedUserSettings = 76,
+    UnmanagedUserUdev = 77,
+}
+
+/// see: [NMDeviceType]( https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMDeviceType )
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum NMDeviceType {
+    #[default]
     Unknown = 0,
     Ethernet = 1,
     Wifi = 2,
@@ -83,6 +199,35 @@ pub enum NMDeviceType {
     Vrf = 31,
     Loopback = 32,
     Hsr = 33,
+}
+
+impl From<(Kind, Type)> for NMDeviceType {
+    fn from(value: (Kind, Type)) -> Self {
+        match value {
+            (Kind::Bond, _) => Self::Bond,
+            (Kind::Bridge, _) => Self::Bridge,
+            (Kind::Tun, _) => Self::Tun,
+            (Kind::Veth, _) => Self::VEth,
+            (_, Type::Ether) => Self::Ethernet,
+            (_, Type::Loopback) => Self::Loopback,
+            (_, Type::Wlan) => Self::Wifi,
+            _ => {
+                warn!(value = ?value, "unknown device type");
+                Self::Unknown
+            }
+        }
+    }
+}
+
+/// [NMMetered]( https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMMetered )
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum NMMetered {
+    #[default]
+    Unknown = 0,
+    Yes = 1,
+    No = 2,
+    GuessYes = 3,
+    GuessNo = 4,
 }
 
 /// see: [NMRadioFlags]( https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMRadioFlags )

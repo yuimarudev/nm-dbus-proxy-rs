@@ -5,13 +5,17 @@ use zbus::{
     zvariant::{ObjectPath, OwnedObjectPath, OwnedValue},
 };
 
+pub mod access_point;
 pub mod active_connection;
+pub mod device;
 
 use crate::enums::{NMConnectivityState, NMRadioFlags};
 
 /// see: [NetworkManager]( https://www.networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.html )
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct NetworkManager {
     pub active_connections: Vec<OwnedObjectPath>,
+    pub devices: Vec<OwnedObjectPath>,
 }
 
 #[interface(name = "org.freedesktop.NetworkManager")]
@@ -111,20 +115,22 @@ impl NetworkManager {
     //     todo!()
     // }
 
-    // /// GetAllDevices method
-    // fn get_all_devices(&self) -> zbus::Result<Vec<OwnedObjectPath>> {
-    //     todo!()
-    // }
+    /// GetAllDevices method
+    fn get_all_devices(&self) -> Vec<OwnedObjectPath> {
+        // TODO: refresh data from systemd-networkd
+        self.devices.clone()
+    }
 
     // /// GetDeviceByIpIface method
     // fn get_device_by_ip_iface(&self, iface: &str) -> zbus::Result<OwnedObjectPath> {
     //     todo!()
     // }
 
-    // /// GetDevices method
-    // fn get_devices(&self) -> zbus::Result<Vec<OwnedObjectPath>> {
-    //     todo!()
-    // }
+    /// GetDevices method
+    fn get_devices(&self) -> Vec<OwnedObjectPath> {
+        // TODO: refresh data from systemd-networkd
+        self.devices.clone()
+    }
 
     // /// GetLogging method
     // fn get_logging(&self) -> zbus::Result<(String, String)> {
@@ -182,9 +188,10 @@ impl NetworkManager {
     /// ActivatingConnection property
     #[zbus(property)]
     fn activating_connection(&self) -> OwnedObjectPath {
-        ObjectPath::try_from("/org/freedesktop/NetworkManager/ActiveConnection/1")
-            .expect("should parse into D-Bus object path")
-            .into()
+        match self.active_connections.first() {
+            Some(some) => some.clone(),
+            None => OwnedObjectPath::default(),
+        }
     }
 
     /// ActiveConnections property
@@ -196,11 +203,7 @@ impl NetworkManager {
     /// AllDevices property
     #[zbus(property)]
     fn all_devices(&self) -> Vec<OwnedObjectPath> {
-        vec![
-            ObjectPath::try_from("/org/freedesktop/NetworkManager/Devices/eth0")
-                .expect("should parse into D-Bus object path")
-                .into(),
-        ]
+        self.devices.clone()
     }
 
     /// Capabilities property
@@ -253,11 +256,7 @@ impl NetworkManager {
     /// Devices property
     #[zbus(property)]
     fn devices(&self) -> Vec<OwnedObjectPath> {
-        vec![
-            ObjectPath::try_from("/org/freedesktop/NetworkManager/Devices/eth0")
-                .expect("should parse into D-Bus object path")
-                .into(),
-        ]
+        self.devices.clone()
     }
 
     /// GlobalDnsConfiguration property

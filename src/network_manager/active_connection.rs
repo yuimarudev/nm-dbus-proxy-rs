@@ -5,7 +5,9 @@ use zbus::{
 
 use crate::enums::{NMActivationStateFlags, NMActiveConnectionState};
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ActiveConnection {
+    pub devices: Vec<OwnedObjectPath>,
     pub id: String,
 }
 
@@ -50,11 +52,7 @@ impl ActiveConnection {
     /// Devices property
     #[zbus(property)]
     fn devices(&self) -> Vec<OwnedObjectPath> {
-        // TODO
-        vec![OwnedObjectPath::from(
-            ObjectPath::try_from("/org/freedesktop/NetworkManager/Devices/eth0")
-                .expect("should parse object path"),
-        )]
+        self.devices.clone()
     }
 
     /// Dhcp4Config property
@@ -126,7 +124,7 @@ impl ActiveConnection {
 
     /// Type property
     #[zbus(property)]
-    fn r#type(&self) -> String {
+    fn type_(&self) -> String {
         // TODO
         String::from("ethernet")
     }
