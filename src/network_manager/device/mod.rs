@@ -64,7 +64,7 @@ impl Device {
     // #[zbus(signal)]
     // fn state_changed(&self, new_state: u32, old_state: u32, reason: u32) -> zbus::Result<()>;
 
-    /// ActiveConnection property
+    /// `ActiveConnection` property
     #[zbus(property)]
     fn active_connection(&self) -> OwnedObjectPath {
         self.active_connection.clone()
@@ -81,7 +81,7 @@ impl Device {
     //     todo!()
     // }
 
-    /// AvailableConnections property
+    /// `AvailableConnections` property
     #[zbus(property)]
     fn available_connections(&self) -> Vec<OwnedObjectPath> {
         // TODO
@@ -95,20 +95,20 @@ impl Device {
         0
     }
 
-    /// DeviceType property
+    /// `DeviceType` property
     #[zbus(property)]
     fn device_type(&self) -> u32 {
         self.r#type as u32
     }
 
-    /// Dhcp4Config property
+    /// `Dhcp4Config` property
     #[zbus(property)]
     fn dhcp4_config(&self) -> OwnedObjectPath {
         // TODO
         OwnedObjectPath::default()
     }
 
-    /// Dhcp6Config property
+    /// `Dhcp6Config` property
     #[zbus(property)]
     fn dhcp6_config(&self) -> OwnedObjectPath {
         // TODO
@@ -121,28 +121,28 @@ impl Device {
         self.driver.clone()
     }
 
-    /// DriverVersion property
+    /// `DriverVersion` property
     #[zbus(property)]
     fn driver_version(&self) -> String {
         // TODO
         String::new()
     }
 
-    /// FirmwareMissing property
+    /// `FirmwareMissing` property
     #[zbus(property)]
     fn firmware_missing(&self) -> bool {
         // TODO
         false
     }
 
-    /// FirmwareVersion property
+    /// `FirmwareVersion` property
     #[zbus(property)]
     fn firmware_version(&self) -> String {
         // TODO
         String::new()
     }
 
-    /// HwAddress property
+    /// `HwAddress` property
     #[zbus(property)]
     fn hw_address(&self) -> String {
         // TODO
@@ -155,14 +155,14 @@ impl Device {
         self.interface.clone()
     }
 
-    /// InterfaceFlags property
+    /// `InterfaceFlags` property
     #[zbus(property)]
     fn interface_flags(&self) -> u32 {
         // TODO
         NMDeviceInterfaceFlags::default() as u32
     }
 
-    /// Ip4Config property
+    /// `Ip4Config` property
     #[zbus(property)]
     fn ip4_config(&self) -> OwnedObjectPath {
         // TODO
@@ -172,34 +172,34 @@ impl Device {
         )
     }
 
-    /// Ip4Connectivity property
+    /// `Ip4Connectivity` property
     #[zbus(property)]
     fn ip4_connectivity(&self) -> u32 {
         // TODO
         NMConnectivityState::Full as u32
     }
 
-    /// Ip6Config property
+    /// `Ip6Config` property
     #[zbus(property)]
     fn ip6_config(&self) -> OwnedObjectPath {
         // TODO
         OwnedObjectPath::default()
     }
 
-    /// Ip6Connectivity property
+    /// `Ip6Connectivity` property
     #[zbus(property)]
     fn ip6_connectivity(&self) -> u32 {
         // TODO
         NMConnectivityState::Full as u32
     }
 
-    /// IpInterface property
+    /// `IpInterface` property
     #[zbus(property)]
     fn ip_interface(&self) -> String {
         self.ip_interface.clone()
     }
 
-    /// LldpNeighbors property
+    /// `LldpNeighbors` property
     #[zbus(property)]
     fn lldp_neighbors(&self) -> Vec<HashMap<String, OwnedValue>> {
         // TODO
@@ -230,7 +230,7 @@ impl Device {
         self.mtu
     }
 
-    /// NmPluginMissing property
+    /// `NmPluginMissing` property
     #[zbus(property)]
     fn nm_plugin_missing(&self) -> bool {
         // TODO
@@ -243,7 +243,7 @@ impl Device {
         self.path.clone()
     }
 
-    /// PhysicalPortId property
+    /// `PhysicalPortId` property
     #[zbus(property)]
     fn physical_port_id(&self) -> String {
         // TODO
@@ -271,7 +271,7 @@ impl Device {
         NMDeviceState::Activated as u32
     }
 
-    /// StateReason property
+    /// `StateReason` property
     #[zbus(property)]
     fn state_reason(&self) -> (u32, u32) {
         // TODO

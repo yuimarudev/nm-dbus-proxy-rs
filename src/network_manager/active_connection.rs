@@ -55,7 +55,7 @@ impl ActiveConnection {
         self.devices.clone()
     }
 
-    /// Dhcp4Config property
+    /// `Dhcp4Config` property
     #[zbus(property)]
     fn dhcp4_config(&self) -> OwnedObjectPath {
         // TODO
@@ -65,7 +65,7 @@ impl ActiveConnection {
         )
     }
 
-    /// Dhcp6Config property
+    /// `Dhcp6Config` property
     #[zbus(property)]
     fn dhcp6_config(&self) -> OwnedObjectPath {
         // TODO
@@ -81,7 +81,7 @@ impl ActiveConnection {
         self.id.clone()
     }
 
-    /// Ip4Config property
+    /// `Ip4Config` property
     #[zbus(property)]
     fn ip4_config(&self) -> OwnedObjectPath {
         // TODO
@@ -91,7 +91,7 @@ impl ActiveConnection {
         )
     }
 
-    /// Ip6Config property
+    /// `Ip6Config` property
     #[zbus(property)]
     fn ip6_config(&self) -> OwnedObjectPath {
         // TODO
@@ -101,7 +101,7 @@ impl ActiveConnection {
         )
     }
 
-    /// SpecificObject property
+    /// `SpecificObject` property
     #[zbus(property)]
     fn specific_object(&self) -> OwnedObjectPath {
         // TODO ?? maybe this is org.freedesktop.NetworkManager.VPN.Connection if any?
@@ -115,7 +115,7 @@ impl ActiveConnection {
         NMActiveConnectionState::Activated as u32
     }
 
-    /// StateFlags property
+    /// `StateFlags` property
     #[zbus(property)]
     fn state_flags(&self) -> u32 {
         // TODO

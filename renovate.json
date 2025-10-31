@@ -1,7 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "commitBodyTable": true,
-  "commitMessagePrefix": ":arrow_up:",
+  "commitMessagePrefix": "⬆️",
   "enabled": true,
   "gitAuthor": "Renovate Bot <renovatebot@noreply.jokeyrhy.me>",
   "minimumReleaseAge": "14 days",
