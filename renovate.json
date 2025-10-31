@@ -5,5 +5,20 @@
   "enabled": true,
   "gitAuthor": "Renovate Bot <renovatebot@noreply.jokeyrhy.me>",
   "minimumReleaseAge": "14 days",
+  "packageRules": [
+    {
+      "matchPackageNames": [
+        "/(\\b|_)opentelemetry(\\b|_)/i",
+        "/(\\b|_)otel(\\b|_)/i",
+        "/(\\b|_)tracing(\\b|_)/i"
+      ]
+    },
+    {
+      "matchPackageNames": ["/(\\b|_)facet(\\b|_)/i", "/(\\b|_)serde(\\b|_)/i"]
+    },
+    {
+      "matchPackageNames": ["/(\\b|_)zbus(\\b|_)/i"]
+    }
+  ],
   "prConcurrentLimit": 3
 }
