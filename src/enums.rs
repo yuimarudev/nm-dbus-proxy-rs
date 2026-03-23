@@ -1,8 +1,9 @@
+// Modified by yuimarudev on 2026-03-23.
+// This file contains changes from the original upstream work.
 use tracing::warn;
 
 use crate::systemd_networkd::link::{Kind, Type};
 
-/// [NM80211Mode]( https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NM80211Mode )
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum NM80211Mode {
     #[default]
@@ -13,7 +14,6 @@ pub enum NM80211Mode {
     Mesh = 4,
 }
 
-/// see: [NMActivationStateFlags](https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMActivationStateFlags)
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum NMActivationStateFlags {
     #[default]
@@ -28,8 +28,9 @@ pub enum NMActivationStateFlags {
     External = 0x80,
 }
 
-/// see: [NMActiveConnectionState](https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMActiveConnectionState)
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum NMActiveConnectionState {
+    #[default]
     Unknown = 0,
     Activating = 1,
     Activated = 2,
@@ -37,8 +38,9 @@ pub enum NMActiveConnectionState {
     Deactivated = 4,
 }
 
-/// see: [NMConnectivityState](https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMConnectivityState)
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum NMConnectivityState {
+    #[default]
     Unknown = 0,
     None = 1,
     Portal = 2,
@@ -46,7 +48,6 @@ pub enum NMConnectivityState {
     Full = 4,
 }
 
-/// [NMDeviceInterfaceFlags]( https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMDeviceInterfaceFlags )
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum NMDeviceInterfaceFlags {
     #[default]
@@ -58,7 +59,16 @@ pub enum NMDeviceInterfaceFlags {
     LldpClientEnabled = 0x20000,
 }
 
-/// see: [NMDeviceState]( https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMDeviceState )
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum NMDeviceCapabilities {
+    #[default]
+    None = 0x00000000,
+    NMSupported = 0x00000001,
+    CarrierDetect = 0x00000002,
+    IsSoftware = 0x00000004,
+    Sriov = 0x00000008,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum NMDeviceState {
     #[default]
@@ -77,7 +87,6 @@ pub enum NMDeviceState {
     Failed = 120,
 }
 
-/// [NMDeviceStateReason]( https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMDeviceStateReason )
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum NMDeviceStateReason {
     None = 0,
@@ -161,7 +170,6 @@ pub enum NMDeviceStateReason {
     UnmanagedUserUdev = 77,
 }
 
-/// see: [NMDeviceType]( https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMDeviceType )
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum NMDeviceType {
     #[default]
@@ -201,25 +209,64 @@ pub enum NMDeviceType {
     Hsr = 33,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum NMDeviceWifiCapabilities {
+    #[default]
+    None = 0x00000000,
+    CipherWep40 = 0x00000001,
+    CipherWep104 = 0x00000002,
+    CipherTkip = 0x00000004,
+    CipherCcmp = 0x00000008,
+    Wpa = 0x00000010,
+    Rsn = 0x00000020,
+    Ap = 0x00000040,
+    Adhoc = 0x00000080,
+    FreqValid = 0x00000100,
+    Freq2Ghz = 0x00000200,
+    Freq5Ghz = 0x00000400,
+    Freq6Ghz = 0x00000800,
+    Mesh = 0x00001000,
+    IbssRsn = 0x00002000,
+}
+
 impl From<(Kind, Type)> for NMDeviceType {
     fn from(value: (Kind, Type)) -> Self {
         match value {
             (Kind::Bond, _) => Self::Bond,
             (Kind::Bridge, _) => Self::Bridge,
-            (Kind::Tun, _) => Self::Tun,
+            (Kind::Dummy, _) => Self::Dummy,
+            (Kind::Hsr, _) => Self::Hsr,
+            (Kind::Geneve, _) | (Kind::Gre, _) | (Kind::Gretap, _) | (Kind::Ip6gre, _)
+            | (Kind::Ip6gretap, _) | (Kind::Ip6tnl, _) | (Kind::Ipip, _) | (Kind::Sit, _) => {
+                Self::IpTunnel
+            }
+            (Kind::Ipvlan, _) => Self::Generic,
+            (Kind::Lowpan, _) => Self::SixLowPan,
+            (Kind::Macsec, _) => Self::MacSec,
+            (Kind::Macvlan, _) => Self::MacVlan,
+            (Kind::Team, _) => Self::Team,
+            (Kind::Tap, _) | (Kind::Tun, _) => Self::Tun,
             (Kind::Veth, _) => Self::VEth,
+            (Kind::Vlan, _) => Self::Vlan,
+            (Kind::Vrf, _) => Self::Vrf,
+            (Kind::Vxlan, _) => Self::VxLan,
+            (Kind::Wireguard, _) => Self::WireGuard,
+            (_, Type::Bluetooth) => Self::Bluetooth,
             (_, Type::Ether) => Self::Ethernet,
+            (_, Type::Infiniband) => Self::Infiniband,
             (_, Type::Loopback) => Self::Loopback,
+            (_, Type::Ppp) => Self::Ppp,
             (_, Type::Wlan) => Self::Wifi,
+            (_, Type::Wpan) => Self::WPan,
+            (_, Type::Wwan) => Self::Modem,
             _ => {
                 warn!(value = ?value, "unknown device type");
-                Self::Unknown
+                Self::Generic
             }
         }
     }
 }
 
-/// [NMMetered]( https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMMetered )
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum NMMetered {
     #[default]
@@ -230,9 +277,65 @@ pub enum NMMetered {
     GuessNo = 4,
 }
 
-/// see: [NMRadioFlags]( https://www.networkmanager.dev/docs/api/latest/nm-dbus-types.html#NMRadioFlags )
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum NMRadioFlags {
+    #[default]
     None = 0,
     WlanAvailable = 1,
     WwanAvailable = 2,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum NM80211ApFlags {
+    #[default]
+    None = 0x00000000,
+    Privacy = 0x00000001,
+    Wps = 0x00000002,
+    WpsPbc = 0x00000004,
+    WpsPin = 0x00000008,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum NM80211ApSecurityFlags {
+    #[default]
+    None = 0x00000000,
+    PairWep40 = 0x00000001,
+    PairWep104 = 0x00000002,
+    PairTkip = 0x00000004,
+    PairCcmp = 0x00000008,
+    GroupWep40 = 0x00000010,
+    GroupWep104 = 0x00000020,
+    GroupTkip = 0x00000040,
+    GroupCcmp = 0x00000080,
+    KeyMgmtPsk = 0x00000100,
+    KeyMgmt8021X = 0x00000200,
+    KeyMgmtSae = 0x00000400,
+    KeyMgmtOwe = 0x00000800,
+    KeyMgmtOweTm = 0x00001000,
+    KeyMgmtEapSuiteB192 = 0x00002000,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::NMDeviceType;
+    use crate::systemd_networkd::link::{Kind, Type};
+
+    #[test]
+    fn software_kinds_map_to_specific_device_types() {
+        assert_eq!(NMDeviceType::from((Kind::Bond, Type::Ether)), NMDeviceType::Bond);
+        assert_eq!(
+            NMDeviceType::from((Kind::Bridge, Type::Ether)),
+            NMDeviceType::Bridge
+        );
+        assert_eq!(NMDeviceType::from((Kind::Dummy, Type::Ether)), NMDeviceType::Dummy);
+        assert_eq!(
+            NMDeviceType::from((Kind::Macvlan, Type::Ether)),
+            NMDeviceType::MacVlan
+        );
+        assert_eq!(NMDeviceType::from((Kind::Tun, Type::None)), NMDeviceType::Tun);
+        assert_eq!(
+            NMDeviceType::from((Kind::Wireguard, Type::None)),
+            NMDeviceType::WireGuard
+        );
+    }
 }

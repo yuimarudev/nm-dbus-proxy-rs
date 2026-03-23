@@ -1,52 +1,61 @@
-use zbus::{
-    interface,
-    zvariant::{ObjectPath, OwnedObjectPath},
-};
+// Modified by yuimarudev on 2026-03-23.
+// This file contains changes from the original upstream work.
+use zbus::{interface, object_server::SignalEmitter, zvariant::OwnedObjectPath};
 
-use crate::enums::{NMActivationStateFlags, NMActiveConnectionState};
+use crate::enums::NMActiveConnectionState;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ActiveConnection {
+    pub connection: OwnedObjectPath,
+    pub controller: OwnedObjectPath,
+    pub default: bool,
+    pub default6: bool,
     pub devices: Vec<OwnedObjectPath>,
+    pub dhcp4_config: OwnedObjectPath,
+    pub dhcp6_config: OwnedObjectPath,
     pub id: String,
+    pub ip4_config: OwnedObjectPath,
+    pub ip6_config: OwnedObjectPath,
+    pub specific_object: OwnedObjectPath,
+    pub state: NMActiveConnectionState,
+    pub state_flags: u32,
+    pub type_: String,
+    pub uuid: String,
+    pub vpn: bool,
 }
 
 /// [NetworkManager.Connection.Active]( https://www.networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.Connection.Active.html )
 #[interface(name = "org.freedesktop.NetworkManager.Connection.Active")]
 impl ActiveConnection {
-    // /// StateChanged signal
-    // #[zbus(signal)]
-    // async fn state_changed(&self, _state: u32, _reason: u32) -> zbus::Result<()>;
+    #[zbus(signal, name = "StateChanged")]
+    pub(crate) async fn emit_state_changed(
+        emitter: &SignalEmitter<'_>,
+        state: u32,
+        reason: u32,
+    ) -> zbus::Result<()>;
 
     /// Connection property
     #[zbus(property)]
     fn connection(&self) -> OwnedObjectPath {
-        // TODO
-        OwnedObjectPath::from(
-            ObjectPath::try_from("/org/freedesktop/NetworkManager/Settings/TODO")
-                .expect("should parse object path"),
-        )
+        self.connection.clone()
     }
 
     /// Controller property
     #[zbus(property)]
     fn controller(&self) -> OwnedObjectPath {
-        // TODO ??
-        OwnedObjectPath::default()
+        self.controller.clone()
     }
 
     /// Default property
     #[zbus(property)]
     fn default(&self) -> bool {
-        // TODO
-        false
+        self.default
     }
 
     /// Default6 property
     #[zbus(property)]
     fn default6(&self) -> bool {
-        // TODO
-        false
+        self.default6
     }
 
     /// Devices property
@@ -58,21 +67,13 @@ impl ActiveConnection {
     /// `Dhcp4Config` property
     #[zbus(property)]
     fn dhcp4_config(&self) -> OwnedObjectPath {
-        // TODO
-        OwnedObjectPath::from(
-            ObjectPath::try_from("/org/freedesktop/NetworkManager/DHCP4Config/TODO")
-                .expect("should parse object path"),
-        )
+        self.dhcp4_config.clone()
     }
 
     /// `Dhcp6Config` property
     #[zbus(property)]
     fn dhcp6_config(&self) -> OwnedObjectPath {
-        // TODO
-        OwnedObjectPath::from(
-            ObjectPath::try_from("/org/freedesktop/NetworkManager/DHCP6Config/TODO")
-                .expect("should parse object path"),
-        )
+        self.dhcp6_config.clone()
     }
 
     /// Id property
@@ -84,62 +85,48 @@ impl ActiveConnection {
     /// `Ip4Config` property
     #[zbus(property)]
     fn ip4_config(&self) -> OwnedObjectPath {
-        // TODO
-        OwnedObjectPath::from(
-            ObjectPath::try_from("/org/freedesktop/NetworkManager/IP4Config/TODO")
-                .expect("should parse object path"),
-        )
+        self.ip4_config.clone()
     }
 
     /// `Ip6Config` property
     #[zbus(property)]
     fn ip6_config(&self) -> OwnedObjectPath {
-        // TODO
-        OwnedObjectPath::from(
-            ObjectPath::try_from("/org/freedesktop/NetworkManager/IP6Config/TODO")
-                .expect("should parse object path"),
-        )
+        self.ip6_config.clone()
     }
 
     /// `SpecificObject` property
     #[zbus(property)]
     fn specific_object(&self) -> OwnedObjectPath {
-        // TODO ?? maybe this is org.freedesktop.NetworkManager.VPN.Connection if any?
-        OwnedObjectPath::default()
+        self.specific_object.clone()
     }
 
     /// State property
     #[zbus(property)]
     fn state(&self) -> u32 {
-        // TODO
-        NMActiveConnectionState::Activated as u32
+        self.state as u32
     }
 
     /// `StateFlags` property
     #[zbus(property)]
     fn state_flags(&self) -> u32 {
-        // TODO
-        NMActivationStateFlags::None as u32
+        self.state_flags
     }
 
     /// Type property
     #[zbus(property)]
     fn type_(&self) -> String {
-        // TODO
-        String::from("ethernet")
+        self.type_.clone()
     }
 
     /// Uuid property
     #[zbus(property)]
     fn uuid(&self) -> String {
-        // TODO
-        String::from("TODO")
+        self.uuid.clone()
     }
 
     /// Vpn property
     #[zbus(property)]
     fn vpn(&self) -> bool {
-        // TODO
-        false
+        self.vpn
     }
 }

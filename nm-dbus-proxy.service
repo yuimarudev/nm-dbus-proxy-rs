@@ -1,3 +1,5 @@
+# Modified by yuimarudev on 2026-03-23.
+# This file contains changes from the original upstream work.
 [Unit]
 After=dbus.service network-pre.target
 Before=network.target
@@ -7,17 +9,13 @@ StartLimitIntervalSec=0
 Wants=network.target
 
 [Service]
-BusName=org.freedesktop.NetworkManager
 Environment="RUST_BACKTRACE=1"
 ExecStart=/usr/bin/nm-dbus-proxy
 KillMode=process
 ProtectHome=true
 ProtectSystem=true
 Restart=on-failure
-Type=dbus
-User=nobody
+Type=simple
 
 [Install]
 WantedBy=multi-user.target
-Alias=dbus-org.freedesktop.NetworkManager.service
-

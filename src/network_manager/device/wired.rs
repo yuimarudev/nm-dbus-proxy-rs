@@ -1,7 +1,15 @@
+// Modified by yuimarudev on 2026-03-23.
+// This file contains changes from the original upstream work.
 use zbus::interface;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct DeviceWired;
+pub struct DeviceWired {
+    pub carrier: bool,
+    pub hw_address: String,
+    pub perm_hw_address: String,
+    pub s390_subchannels: Vec<String>,
+    pub speed: u32,
+}
 
 /// see: [Device.Wired]( https://www.networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.Device.Wired.html )
 #[interface(name = "org.freedesktop.NetworkManager.Device.Wired")]
@@ -9,32 +17,27 @@ impl DeviceWired {
     #[deprecated]
     #[zbus(property)]
     fn carrier(&self) -> bool {
-        // TODO
-        true
+        self.carrier
     }
 
     #[deprecated]
     #[zbus(property)]
     fn hw_address(&self) -> String {
-        // TODO
-        String::from("01:23:45:67:89:AB")
+        self.hw_address.clone()
     }
 
     #[zbus(property)]
     fn perm_hw_address(&self) -> String {
-        // TODO
-        String::from("01:23:45:67:89:AB")
+        self.perm_hw_address.clone()
     }
 
     #[zbus(property)]
     fn speed(&self) -> u32 {
-        // TODO
-        1000
+        self.speed
     }
 
     #[zbus(property)]
     fn s390_subchannels(&self) -> Vec<String> {
-        // TODO
-        vec![]
+        self.s390_subchannels.clone()
     }
 }
