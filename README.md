@@ -2,6 +2,12 @@
 
 D-Bus service that implements the [NetworkManager][1] D-Bus API, but interacting with non-NetworkManager components underneath
 
+## upstream and licensing
+
+This repository is a modified fork of [Ron Waldon-Howe / nm-dbus-proxy-rs][6].
+The original upstream work is copyright Ron Waldon-Howe.
+This fork remains distributed under the Apache License 2.0; see [LICENSE](./LICENSE).
+
 ## what? why?
 
 - [systemd][2] has become the dominant init system for desktop Linux
@@ -37,3 +43,4 @@ D-Bus service that implements the [NetworkManager][1] D-Bus API, but interacting
 [3]: https://www.freedesktop.org/software/systemd/man/latest/systemd-networkd.html
 [4]: https://github.com/pop-os/cosmic-applets
 [5]: https://github.com/pop-os/cosmic-greeter
+[6]: https://gitlab.com/jokeyrhyme/nm-dbus-proxy-rs
