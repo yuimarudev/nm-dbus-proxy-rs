@@ -89,7 +89,8 @@ impl State {
         let mut state = Self::default();
 
         for (path, interfaces) in &managed_objects {
-            if let Some(properties) = interface_properties(interfaces, BASIC_SERVICE_SET_INTERFACE) {
+            if let Some(properties) = interface_properties(interfaces, BASIC_SERVICE_SET_INTERFACE)
+            {
                 state.basic_service_sets.push(BasicServiceSet {
                     path: path.clone(),
                     address: property::<String>(properties, "Address").unwrap_or_default(),
@@ -139,7 +140,8 @@ impl State {
             }
 
             if let Some(properties) = interface_properties(interfaces, STATION_INTERFACE) {
-                let station_proxy = Proxy::new(conn, DESTINATION, path.as_str(), STATION_INTERFACE).await?;
+                let station_proxy =
+                    Proxy::new(conn, DESTINATION, path.as_str(), STATION_INTERFACE).await?;
                 let ordered_networks = station_proxy
                     .call::<_, _, Vec<(OwnedObjectPath, i16)>>("GetOrderedNetworks", &())
                     .await
@@ -170,7 +172,9 @@ impl State {
     }
 
     pub fn known_network_by_path(&self, path: &OwnedObjectPath) -> Option<&KnownNetwork> {
-        self.known_networks.iter().find(|network| &network.path == path)
+        self.known_networks
+            .iter()
+            .find(|network| &network.path == path)
     }
 
     pub fn network_by_path(&self, path: &OwnedObjectPath) -> Option<&Network> {
@@ -178,8 +182,65 @@ impl State {
     }
 
     pub fn station_by_device_path(&self, device_path: &OwnedObjectPath) -> Option<&Station> {
-        self.stations.iter().find(|station| station.path == *device_path)
+        self.stations
+            .iter()
+            .find(|station| station.path == *device_path)
     }
+}
+
+pub async fn station_scan(conn: &Connection, station_path: &OwnedObjectPath) -> Result<()> {
+    let proxy = Proxy::new(conn, DESTINATION, station_path.as_str(), STATION_INTERFACE).await?;
+    proxy.call::<_, _, ()>("Scan", &()).await?;
+    Ok(())
+}
+
+pub async fn station_disconnect(conn: &Connection, station_path: &OwnedObjectPath) -> Result<()> {
+    let proxy = Proxy::new(conn, DESTINATION, station_path.as_str(), STATION_INTERFACE).await?;
+    proxy.call::<_, _, ()>("Disconnect", &()).await?;
+    Ok(())
+}
+
+pub async fn station_connect_hidden(
+    conn: &Connection,
+    station_path: &OwnedObjectPath,
+    ssid: &str,
+) -> Result<()> {
+    let proxy = Proxy::new(conn, DESTINATION, station_path.as_str(), STATION_INTERFACE).await?;
+    let ssid_bytes = ssid.as_bytes().to_vec();
+    proxy
+        .call::<_, _, OwnedObjectPath>("ConnectHiddenNetwork", &(ssid_bytes,))
+        .await?;
+    Ok(())
+}
+
+pub async fn known_network_for_name(
+    conn: &Connection,
+    ssid: &str,
+) -> Result<Option<OwnedObjectPath>> {
+    let state = State::request(conn).await?;
+    Ok(state
+        .known_networks
+        .into_iter()
+        .find(|network| network.name == ssid)
+        .map(|network| network.path))
+}
+
+pub async fn known_network_connect(
+    conn: &Connection,
+    known_network_path: &OwnedObjectPath,
+    station_path: &OwnedObjectPath,
+) -> Result<()> {
+    let proxy = Proxy::new(
+        conn,
+        DESTINATION,
+        known_network_path.as_str(),
+        KNOWN_NETWORK_INTERFACE,
+    )
+    .await?;
+    proxy
+        .call::<_, _, ()>("Connect", &(station_path.clone(),))
+        .await?;
+    Ok(())
 }
 
 fn default_object_path() -> OwnedObjectPath {

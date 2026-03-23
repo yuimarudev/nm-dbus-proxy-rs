@@ -9,11 +9,7 @@ pub struct AgentManager {
 
 #[interface(name = "org.freedesktop.NetworkManager.AgentManager")]
 impl AgentManager {
-    fn register(
-        &self,
-        identifier: &str,
-        #[zbus(header)] header: Header<'_>,
-    ) -> fdo::Result<()> {
+    fn register(&self, identifier: &str, #[zbus(header)] header: Header<'_>) -> fdo::Result<()> {
         if identifier.is_empty() {
             return Err(fdo::Error::InvalidArgs(String::from(
                 "agent identifier must not be empty",

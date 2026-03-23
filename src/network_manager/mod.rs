@@ -1,9 +1,10 @@
 // Modified by yuimarudev on 2026-03-23.
 // This file contains changes from the original upstream work.
+use std::sync::{Arc, Mutex, OnceLock};
 use std::{collections::HashMap, time::Duration};
-use std::env;
 
-use tokio::process::Command;
+use futures_util::TryStreamExt;
+use rtnetlink::new_connection;
 use zbus::{
     Connection, ObjectServer, Proxy,
     fdo::{self, Properties},
@@ -33,6 +34,47 @@ use crate::{
     },
     runtime::{ActiveConnectionRecord, ConnectionRecord, Runtime},
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LinkOperation {
+    Up,
+    Down,
+    Delete,
+}
+
+type LinkOperationOverride =
+    Arc<dyn Fn(LinkOperation, &str) -> Result<(), String> + Send + Sync + 'static>;
+
+fn link_operation_override_slot() -> &'static Mutex<Option<LinkOperationOverride>> {
+    static SLOT: OnceLock<Mutex<Option<LinkOperationOverride>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+pub fn set_link_operation_override<F>(override_fn: F)
+where
+    F: Fn(LinkOperation, &str) -> Result<(), String> + Send + Sync + 'static,
+{
+    *link_operation_override_slot()
+        .lock()
+        .expect("link operation override mutex poisoned") = Some(Arc::new(override_fn));
+}
+
+pub fn clear_link_operation_override() {
+    *link_operation_override_slot()
+        .lock()
+        .expect("link operation override mutex poisoned") = None;
+}
+
+pub(crate) fn maybe_run_link_operation_override(
+    operation: LinkOperation,
+    interface_name: &str,
+) -> Option<Result<(), String>> {
+    let override_fn = link_operation_override_slot()
+        .lock()
+        .expect("link operation override mutex poisoned")
+        .clone()?;
+    Some(override_fn(operation, interface_name))
+}
 
 /// see: [NetworkManager]( https://www.networkmanager.dev/docs/api/latest/gdbus-org.freedesktop.NetworkManager.html )
 #[derive(Clone, Debug, Default)]
@@ -110,9 +152,7 @@ impl NetworkManager {
         };
 
         if !self.runtime.networking_enabled() || self.runtime.sleeping() {
-            return Err(fdo::Error::Failed(String::from(
-                "networking is disabled",
-            )));
+            return Err(fdo::Error::Failed(String::from("networking is disabled")));
         }
         if connection_record.connection_type == "802-11-wireless" {
             if !self.runtime.wireless_enabled() {
@@ -182,7 +222,13 @@ impl NetworkManager {
             .await
             .map_err(fdo::Error::Failed)?;
         let active_path = self
-            .activate_connection(connection_path.clone(), device, specific_object, server, bus)
+            .activate_connection(
+                connection_path.clone(),
+                device,
+                specific_object,
+                server,
+                bus,
+            )
             .await?;
         crate::network_manager::settings::emit_settings_changed(bus, &self.runtime, None)
             .await
@@ -231,18 +277,19 @@ impl NetworkManager {
         snapshot.persisted_files = crate::persistence::snapshot_connection_files()
             .await
             .map_err(fdo::Error::Failed)?;
-        self.runtime.add_checkpoint(crate::runtime::CheckpointRecord {
-            created,
-            devices: device_list.clone(),
-            path: path.clone(),
-            rollback_timeout,
-            rollback_deadline_millis: if rollback_timeout == 0 {
-                None
-            } else {
-                Some(created.saturating_add(i64::from(rollback_timeout) * 1000))
-            },
-            snapshot,
-        });
+        self.runtime
+            .add_checkpoint(crate::runtime::CheckpointRecord {
+                created,
+                devices: device_list.clone(),
+                path: path.clone(),
+                rollback_timeout,
+                rollback_deadline_millis: if rollback_timeout == 0 {
+                    None
+                } else {
+                    Some(created.saturating_add(i64::from(rollback_timeout) * 1000))
+                },
+                snapshot,
+            });
         server
             .at(
                 path.as_str(),
@@ -256,13 +303,9 @@ impl NetworkManager {
             )
             .await
             .map_err(fdo::Error::from)?;
-        crate::emit_object_added(
-            bus,
-            &path,
-            "org.freedesktop.NetworkManager.Checkpoint",
-        )
-        .await
-        .map_err(|error| fdo::Error::Failed(error.to_string()))?;
+        crate::emit_object_added(bus, &path, "org.freedesktop.NetworkManager.Checkpoint")
+            .await
+            .map_err(|error| fdo::Error::Failed(error.to_string()))?;
         emit_root_runtime_changes(bus, &self.runtime)
             .await
             .map_err(|error| fdo::Error::Failed(error.to_string()))?;
@@ -373,7 +416,7 @@ impl NetworkManager {
 
         let interface_name = interface_name.to_string();
         if record.value.type_ == "802-11-wireless" {
-            deactivate_wifi_connection(&interface_name)
+            deactivate_wifi_connection_with_bus(bus, &interface_name)
                 .await
                 .map_err(fdo::Error::Failed)?;
         } else {
@@ -420,9 +463,14 @@ impl NetworkManager {
     ) -> fdo::Result<()> {
         self.runtime.set_networking_enabled(enable);
         if !enable {
-            clear_active_connections(server, &self.runtime)
-                .await
-                .map_err(fdo::Error::Failed)?;
+            clear_active_connections_of_types(
+                server,
+                &self.runtime,
+                &["802-11-wireless", "802-3-ethernet"],
+                Some(bus),
+            )
+            .await
+            .map_err(fdo::Error::Failed)?;
         }
         emit_root_runtime_changes(bus, &self.runtime)
             .await
@@ -470,11 +518,7 @@ impl NetworkManager {
         self.runtime.logging()
     }
 
-    async fn reload(
-        &self,
-        _flags: u32,
-        #[zbus(connection)] bus: &Connection,
-    ) -> fdo::Result<()> {
+    async fn reload(&self, _flags: u32, #[zbus(connection)] bus: &Connection) -> fdo::Result<()> {
         let system_bus = zbus::conn::Builder::system()
             .map_err(|error| fdo::Error::Failed(error.to_string()))?
             .build()
@@ -504,9 +548,14 @@ impl NetworkManager {
     ) -> fdo::Result<()> {
         self.runtime.set_sleeping(sleep);
         if sleep {
-            clear_active_connections(server, &self.runtime)
-                .await
-                .map_err(fdo::Error::Failed)?;
+            clear_active_connections_of_types(
+                server,
+                &self.runtime,
+                &["802-11-wireless", "802-3-ethernet"],
+                Some(bus),
+            )
+            .await
+            .map_err(fdo::Error::Failed)?;
         }
         emit_root_runtime_changes(bus, &self.runtime)
             .await
@@ -699,9 +748,14 @@ impl NetworkManager {
     ) -> zbus::Result<()> {
         self.runtime.set_wireless_enabled(value);
         if !value {
-            clear_active_connections_of_types(server, &self.runtime, &["802-11-wireless"])
-                .await
-                .map_err(|error| zbus::Error::from(fdo::Error::Failed(error)))?;
+            clear_active_connections_of_types(
+                server,
+                &self.runtime,
+                &["802-11-wireless"],
+                Some(bus),
+            )
+            .await
+            .map_err(|error| zbus::Error::from(fdo::Error::Failed(error)))?;
         }
         emit_root_runtime_changes(bus, &self.runtime).await
     }
@@ -773,38 +827,37 @@ async fn activate_wifi_connection(
     connection: &ConnectionRecord,
     interface_name: &str,
 ) -> Result<(), String> {
-    let mut command = Command::new(iwctl_bin());
-    command.arg("--dont-ask");
-
-    let passphrase = if let Some(existing) = connection.wifi_passphrase() {
-        Some(existing)
-    } else {
-        secret_from_agent(bus, runtime, connection).await
-    };
-    if let Some(passphrase) = &passphrase {
-        command.arg("--passphrase").arg(passphrase);
-    }
-
     let ssid = connection
         .ssid()
         .ok_or_else(|| String::from("Wi-Fi connection is missing SSID"))?;
-    command
-        .arg("station")
-        .arg(interface_name)
-        .arg("connect")
-        .arg(ssid);
+    let state = crate::iwd::State::request(bus)
+        .await
+        .map_err(|error| error.to_string())?;
+    let station_path = state
+        .device_by_name(interface_name)
+        .map(|device| device.path.clone())
+        .ok_or_else(|| format!("unknown iwd station for interface '{interface_name}'"))?;
 
-    if passphrase.is_none() {
-        command.arg("open");
+    if connection.is_hidden() {
+        crate::iwd::station_connect_hidden(bus, &station_path, &ssid)
+            .await
+            .map_err(|error| error.to_string())
+    } else if let Some(path) = crate::iwd::known_network_for_name(bus, &ssid)
+        .await
+        .map_err(|error| error.to_string())?
+    {
+        let _ = if connection.wifi_passphrase().is_none() {
+            None
+        } else {
+            secret_from_agent(bus, runtime, connection).await
+        };
+        crate::iwd::known_network_connect(bus, &path, &station_path)
+            .await
+            .map_err(|error| error.to_string())
     } else {
-        command.arg("psk");
-    }
-
-    let output = command.output().await.map_err(|error| error.to_string())?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        crate::iwd::station_connect_hidden(bus, &station_path, &ssid)
+            .await
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -843,69 +896,88 @@ async fn secret_from_agent(
 }
 
 async fn activate_wired_connection(interface_name: &str) -> Result<(), String> {
-    let output = Command::new(networkctl_bin())
-        .arg("up")
-        .arg(interface_name)
-        .output()
+    if let Some(result) = maybe_run_link_operation_override(LinkOperation::Up, interface_name) {
+        return result;
+    }
+    let (connection, handle, _) = new_connection().map_err(|error| error.to_string())?;
+    tokio::spawn(connection);
+    let index = link_index_by_name(&handle, interface_name).await?;
+    handle
+        .link()
+        .set(index)
+        .up()
+        .execute()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+async fn deactivate_wifi_connection_with_bus(
+    bus: &Connection,
+    interface_name: &str,
+) -> Result<(), String> {
+    let state = crate::iwd::State::request(bus)
         .await
         .map_err(|error| error.to_string())?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-    }
+    let station_path = state
+        .device_by_name(interface_name)
+        .map(|device| device.path.clone())
+        .ok_or_else(|| format!("unknown iwd station for interface '{interface_name}'"))?;
+    crate::iwd::station_disconnect(bus, &station_path)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 pub(crate) async fn deactivate_wifi_connection(interface_name: &str) -> Result<(), String> {
-    let output = Command::new(iwctl_bin())
-        .arg("station")
-        .arg(interface_name)
-        .arg("disconnect")
-        .output()
+    let bus = zbus::conn::Builder::system()
+        .map_err(|error| error.to_string())?
+        .build()
         .await
         .map_err(|error| error.to_string())?;
-
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-    }
+    deactivate_wifi_connection_with_bus(&bus, interface_name).await
 }
 
-async fn deactivate_wired_connection(interface_name: &str) -> Result<(), String> {
-    let output = Command::new(networkctl_bin())
-        .arg("down")
-        .arg(interface_name)
-        .output()
+pub(crate) async fn deactivate_wired_connection(interface_name: &str) -> Result<(), String> {
+    if let Some(result) = maybe_run_link_operation_override(LinkOperation::Down, interface_name) {
+        return result;
+    }
+    let (connection, handle, _) = new_connection().map_err(|error| error.to_string())?;
+    tokio::spawn(connection);
+    let index = link_index_by_name(&handle, interface_name).await?;
+    handle
+        .link()
+        .set(index)
+        .down()
+        .execute()
         .await
-        .map_err(|error| error.to_string())?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
-    }
-}
-
-fn iwctl_bin() -> String {
-    env::var("NM_DBUS_PROXY_IWCTL_BIN").unwrap_or_else(|_| crate::config::current().iwctl_bin)
-}
-
-pub(crate) fn networkctl_bin() -> String {
-    env::var("NM_DBUS_PROXY_NETWORKCTL_BIN")
-        .unwrap_or_else(|_| crate::config::current().networkctl_bin)
+        .map_err(|error| error.to_string())
 }
 
 fn connectivity_check_uri() -> String {
-    env::var("NM_DBUS_PROXY_CONNECTIVITY_URI")
-        .unwrap_or_else(|_| crate::config::current().connectivity_check_uri)
+    crate::config::current().connectivity_check_uri
 }
 
 fn command_exists(name: &str) -> bool {
-    std::process::Command::new("sh")
-        .args(["-c", &format!("command -v {name} >/dev/null")])
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    std::env::var_os("PATH")
+        .map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+        .into_iter()
+        .flatten()
+        .map(|dir| dir.join(name))
+        .any(|path| path.is_file())
+}
+
+pub(crate) async fn link_index_by_name(
+    handle: &rtnetlink::Handle,
+    interface_name: &str,
+) -> Result<u32, String> {
+    let mut links = handle
+        .link()
+        .get()
+        .match_name(interface_name.to_string())
+        .execute();
+    let Some(link) = links.try_next().await.map_err(|error| error.to_string())? else {
+        return Err(format!("unknown link '{interface_name}'"));
+    };
+    Ok(link.header.index)
 }
 
 pub(crate) fn current_boottime_millis() -> i64 {
@@ -921,7 +993,9 @@ fn spawn_checkpoint_timeout(bus: Connection, runtime: Runtime, path: OwnedObject
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            let Some(timeout) = runtime.checkpoint_rollback_timeout(&path, current_boottime_millis()) else {
+            let Some(timeout) =
+                runtime.checkpoint_rollback_timeout(&path, current_boottime_millis())
+            else {
                 break;
             };
             if timeout == 0 {
@@ -949,12 +1023,9 @@ async fn rollback_checkpoint(
     let _ = server
         .remove::<checkpoint::Checkpoint, _>(checkpoint.as_str())
         .await;
-    let _ = crate::emit_object_removed(
-        bus,
-        checkpoint,
-        "org.freedesktop.NetworkManager.Checkpoint",
-    )
-    .await;
+    let _ =
+        crate::emit_object_removed(bus, checkpoint, "org.freedesktop.NetworkManager.Checkpoint")
+            .await;
     crate::persistence::restore_connection_files(&record.snapshot.persisted_files).await?;
     runtime.restore_checkpoint_snapshot(&record.snapshot);
 
@@ -1010,7 +1081,8 @@ async fn rollback_checkpoint(
         if let Some(connection) = runtime.connection(&active.value.connection) {
             match connection.connection_type.as_str() {
                 "802-11-wireless" => {
-                    let _ = activate_wifi_connection(bus, runtime, &connection, &interface_name).await;
+                    let _ =
+                        activate_wifi_connection(bus, runtime, &connection, &interface_name).await;
                 }
                 _ => {
                     let _ = activate_wired_connection(&interface_name).await;
@@ -1056,13 +1128,15 @@ async fn rollback_checkpoint(
         .collect())
 }
 
-
 fn is_networkd_connection_type(connection_type: &str) -> bool {
     connection_type != "802-11-wireless"
 }
 
 fn connectivity_from_runtime(runtime: &Runtime) -> NMConnectivityState {
-    if runtime.sleeping() || !runtime.networking_enabled() || runtime.active_connection_paths().is_empty() {
+    if runtime.sleeping()
+        || !runtime.networking_enabled()
+        || runtime.active_connection_paths().is_empty()
+    {
         NMConnectivityState::None
     } else if !runtime.connectivity_check_enabled() || connectivity_check_uri().is_empty() {
         NMConnectivityState::Full
@@ -1074,24 +1148,29 @@ fn connectivity_from_runtime(runtime: &Runtime) -> NMConnectivityState {
 }
 
 fn connectivity_probe(uri: &str) -> bool {
-    if command_exists("curl") {
-        return std::process::Command::new("curl")
-            .args(["-fsSI", "--max-time", "3", uri])
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
+    let client = match reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return false,
+    };
+
+    match client.head(uri).send() {
+        Ok(response) => response.status().is_success() || response.status().is_redirection(),
+        Err(_) => client
+            .get(uri)
+            .send()
+            .map(|response| response.status().is_success() || response.status().is_redirection())
+            .unwrap_or(false),
     }
-    if command_exists("wget") {
-        return std::process::Command::new("wget")
-            .args(["--spider", "--timeout=3", uri])
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false);
-    }
-    false
 }
 
-pub(crate) async fn emit_root_runtime_changes(bus: &Connection, runtime: &Runtime) -> zbus::Result<()> {
+pub(crate) async fn emit_root_runtime_changes(
+    bus: &Connection,
+    runtime: &Runtime,
+) -> zbus::Result<()> {
     let emitter = SignalEmitter::new(bus, "/org/freedesktop/NetworkManager")?;
     let primary_connection = runtime
         .active_connection_paths()
@@ -1106,17 +1185,38 @@ pub(crate) async fn emit_root_runtime_changes(bus: &Connection, runtime: &Runtim
         .unwrap_or_default();
     let state = state_from_runtime(runtime);
     let changed = HashMap::from([
-        ("ActiveConnections", Value::from(runtime.active_connection_paths())),
-        ("ActivatingConnection", Value::from(primary_connection.clone())),
+        (
+            "ActiveConnections",
+            Value::from(runtime.active_connection_paths()),
+        ),
+        (
+            "ActivatingConnection",
+            Value::from(primary_connection.clone()),
+        ),
         ("AllDevices", Value::from(runtime.device_paths())),
         ("Checkpoints", Value::from(runtime.checkpoint_paths())),
-        ("Connectivity", Value::from(connectivity_from_runtime(runtime) as u32)),
-        ("ConnectivityCheckEnabled", Value::from(runtime.connectivity_check_enabled())),
+        (
+            "Connectivity",
+            Value::from(connectivity_from_runtime(runtime) as u32),
+        ),
+        (
+            "ConnectivityCheckEnabled",
+            Value::from(runtime.connectivity_check_enabled()),
+        ),
         ("Devices", Value::from(runtime.device_paths())),
-        ("GlobalDnsConfiguration", Value::from(runtime.global_dns_configuration())),
-        ("NetworkingEnabled", Value::from(runtime.networking_enabled())),
+        (
+            "GlobalDnsConfiguration",
+            Value::from(runtime.global_dns_configuration()),
+        ),
+        (
+            "NetworkingEnabled",
+            Value::from(runtime.networking_enabled()),
+        ),
         ("PrimaryConnection", Value::from(primary_connection)),
-        ("PrimaryConnectionType", Value::from(primary_connection_type)),
+        (
+            "PrimaryConnectionType",
+            Value::from(primary_connection_type),
+        ),
         ("State", Value::from(state)),
         ("WimaxEnabled", Value::from(runtime.wimax_enabled())),
         ("WirelessEnabled", Value::from(runtime.wireless_enabled())),
@@ -1138,10 +1238,7 @@ pub(crate) async fn emit_device_runtime_changes(
     runtime: &Runtime,
     interface_name: &str,
 ) -> zbus::Result<()> {
-    let emitter = SignalEmitter::new(
-        bus,
-        crate::device_object_path(interface_name),
-    )?;
+    let emitter = SignalEmitter::new(bus, crate::device_object_path(interface_name))?;
     let active_connection = runtime
         .active_connection_for_interface(interface_name)
         .unwrap_or_else(OwnedObjectPath::default);
@@ -1232,8 +1329,13 @@ async fn add_runtime_connection(
 }
 
 async fn clear_active_connections(server: &ObjectServer, runtime: &Runtime) -> Result<(), String> {
-    clear_active_connections_of_types(server, runtime, &["802-11-wireless", "802-3-ethernet"])
-        .await?;
+    clear_active_connections_of_types(
+        server,
+        runtime,
+        &["802-11-wireless", "802-3-ethernet"],
+        None,
+    )
+    .await?;
     Ok(())
 }
 
@@ -1241,12 +1343,16 @@ async fn clear_active_connections_of_types(
     server: &ObjectServer,
     runtime: &Runtime,
     connection_types: &[&str],
+    bus: Option<&Connection>,
 ) -> Result<Vec<String>, String> {
     let mut interfaces = Vec::new();
     let active_paths = runtime.active_connection_paths();
     for active_path in active_paths {
         if let Some(record) = runtime.active_connection(&active_path) {
-            if !connection_types.iter().any(|kind| *kind == record.value.type_) {
+            if !connection_types
+                .iter()
+                .any(|kind| *kind == record.value.type_)
+            {
                 continue;
             }
             if let Some(interface_name) = record
@@ -1258,7 +1364,13 @@ async fn clear_active_connections_of_types(
             {
                 interfaces.push(interface_name.clone());
                 match record.value.type_.as_str() {
-                    "802-11-wireless" => deactivate_wifi_connection(&interface_name).await?,
+                    "802-11-wireless" => {
+                        if let Some(bus) = bus {
+                            deactivate_wifi_connection_with_bus(bus, &interface_name).await?
+                        } else {
+                            deactivate_wifi_connection(&interface_name).await?
+                        }
+                    }
                     "802-3-ethernet" => deactivate_wired_connection(&interface_name).await?,
                     _ => {}
                 }
@@ -1275,4 +1387,47 @@ async fn clear_active_connections_of_types(
             .await;
     }
     Ok(interfaces)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    use super::connectivity_probe;
+
+    #[test]
+    fn connectivity_probe_accepts_successful_http_response() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("listener should expose local address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("server should accept a request");
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request);
+            stream
+                .write_all(
+                    b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .expect("server should write a response");
+        });
+
+        assert!(connectivity_probe(format!("http://{address}/").as_str()));
+        server.join().expect("server thread should exit cleanly");
+    }
+
+    #[test]
+    fn connectivity_probe_rejects_unreachable_endpoint() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("listener should expose local address");
+        drop(listener);
+
+        assert!(!connectivity_probe(format!("http://{address}/").as_str()));
+    }
 }

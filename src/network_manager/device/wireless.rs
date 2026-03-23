@@ -77,39 +77,37 @@ impl DeviceWireless {
             .remove_signal_level_agent(&self.interface_name, &agent_path);
     }
 
-    fn request_scan(
+    async fn request_scan(
         &self,
         _options: HashMap<String, OwnedValue>,
         #[zbus(connection)] bus: &Connection,
     ) -> fdo::Result<()> {
-        let output = std::process::Command::new(iwctl_bin())
-            .arg("station")
-            .arg(&self.interface_name)
-            .arg("scan")
-            .output()
+        let state = crate::iwd::State::request(bus)
+            .await
             .map_err(|error| fdo::Error::Failed(error.to_string()))?;
-        if output.status.success() {
-            let last_scan = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
-                .unwrap_or(0);
-            let _ = self
-                .runtime
-                .update_wireless_device(&self.interface_name, |record| {
-                    record.last_scan = last_scan;
-                });
-            let _ = emit_wireless_property_changed(
-                bus,
-                &self.interface_name,
-                "LastScan",
-                Value::from(last_scan),
-            );
-            Ok(())
-        } else {
-            Err(fdo::Error::Failed(
-                String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            ))
-        }
+        let station_path = state
+            .device_by_name(&self.interface_name)
+            .map(|device| device.path.clone())
+            .ok_or_else(|| fdo::Error::Failed(String::from("unknown iwd station")))?;
+        crate::iwd::station_scan(bus, &station_path)
+            .await
+            .map_err(|error| fdo::Error::Failed(error.to_string()))?;
+        let last_scan = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+            .unwrap_or(0);
+        let _ = self
+            .runtime
+            .update_wireless_device(&self.interface_name, |record| {
+                record.last_scan = last_scan;
+            });
+        let _ = emit_wireless_property_changed(
+            bus,
+            &self.interface_name,
+            "LastScan",
+            Value::from(last_scan),
+        );
+        Ok(())
     }
 
     #[zbus(property)]
@@ -166,20 +164,13 @@ impl DeviceWireless {
     }
 }
 
-fn iwctl_bin() -> String {
-    crate::config::current().iwctl_bin
-}
-
 async fn emit_wireless_property_changed(
     bus: &Connection,
     interface_name: &str,
     property: &str,
     value: Value<'static>,
 ) -> zbus::Result<()> {
-    let emitter = SignalEmitter::new(
-        bus,
-        crate::device_object_path(interface_name),
-    )?;
+    let emitter = SignalEmitter::new(bus, crate::device_object_path(interface_name))?;
     Properties::properties_changed(
         &emitter,
         InterfaceName::try_from("org.freedesktop.NetworkManager.Device.Wireless")
@@ -195,10 +186,7 @@ pub(crate) async fn emit_access_point_added_signal(
     interface_name: &str,
     access_point: OwnedObjectPath,
 ) -> zbus::Result<()> {
-    let emitter = SignalEmitter::new(
-        bus,
-        crate::device_object_path(interface_name),
-    )?;
+    let emitter = SignalEmitter::new(bus, crate::device_object_path(interface_name))?;
     DeviceWireless::emit_access_point_added(&emitter, access_point).await
 }
 
@@ -207,9 +195,6 @@ pub(crate) async fn emit_access_point_removed_signal(
     interface_name: &str,
     access_point: OwnedObjectPath,
 ) -> zbus::Result<()> {
-    let emitter = SignalEmitter::new(
-        bus,
-        crate::device_object_path(interface_name),
-    )?;
+    let emitter = SignalEmitter::new(bus, crate::device_object_path(interface_name))?;
     DeviceWireless::emit_access_point_removed(&emitter, access_point).await
 }

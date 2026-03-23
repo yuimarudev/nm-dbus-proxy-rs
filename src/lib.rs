@@ -1,6 +1,6 @@
 // Modified by yuimarudev on 2026-03-23.
 // This file contains changes from the original upstream work.
-use std::{collections::HashMap, fs, time::Duration};
+use std::{collections::HashMap, fs, path::Path, time::Duration};
 
 use anyhow::Result;
 use futures_util::{StreamExt, stream::SelectAll};
@@ -10,20 +10,22 @@ use network_manager::{
     access_point::AccessPoint,
     active_connection::ActiveConnection,
     agent_manager::AgentManager,
-    dns_manager::DnsManager,
-    vpn_connection::VpnConnection,
-    vpn_plugin::VpnPlugin,
-    wifi_p2p_peer::WifiP2PPeer,
     device::{
-        Device, loopback::DeviceLoopback,
+        Device,
+        loopback::DeviceLoopback,
         specialized::{
             device_aux_interface_names, maybe_ppp_interface_names, maybe_wifi_p2p_interface_name,
             register_device_aux_interfaces, unregister_device_aux_interfaces,
         },
-        wired::DeviceWired, wireless::DeviceWireless,
+        wired::DeviceWired,
+        wireless::DeviceWireless,
     },
+    dns_manager::DnsManager,
     settings::Settings,
     settings_connection::{ConnectionSettings, SettingsConnection},
+    vpn_connection::VpnConnection,
+    vpn_plugin::VpnPlugin,
+    wifi_p2p_peer::WifiP2PPeer,
 };
 use systemd_networkd::{
     Manager,
@@ -52,6 +54,9 @@ pub mod systemd_networkd;
 
 pub use config::{
     Config, clear_override as clear_config_override, set_override as set_config_override,
+};
+pub use network_manager::{
+    LinkOperation, clear_link_operation_override, set_link_operation_override,
 };
 pub use runtime::Runtime;
 
@@ -253,7 +258,6 @@ pub async fn start_service_with_runtime(
         .await?;
 
     let mut access_point_by_network_path = HashMap::new();
-    let mut scan_cache = HashMap::new();
     for station in &wireless.stations {
         for ordered_network in &station.ordered_networks {
             if access_point_by_network_path.contains_key(&ordered_network.path) {
@@ -270,35 +274,26 @@ pub async fn start_service_with_runtime(
                 .and_then(|path| wireless.basic_service_set_by_path(path))
                 .map(|bss| bss.address.clone())
                 .unwrap_or_default();
-            let interface_name = wireless
-                .devices
-                .iter()
-                .find(|device| device.path == network.device)
-                .map(|device| device.name.clone())
-                .unwrap_or_default();
-            let metadata = scan_cache
-                .entry(interface_name.clone())
-                .or_insert_with_key(|interface_name| iw_scan_metadata(interface_name))
-                .get(&hardware_address.to_ascii_lowercase())
-                .cloned()
-                .unwrap_or_default();
-            let (flags, wpa_flags, rsn_flags) = ap_security_flags(network.kind.as_str());
+            let mut metadata = synthetic_ap_metadata(network.kind.as_str());
+            metadata.hw_address = hardware_address.clone();
+            metadata.ssid = network.name.clone();
+            metadata.strength = signal_to_strength(ordered_network.signal);
 
             let path = access_point_path(&ordered_network.path);
             let access_point = AccessPoint {
-                bandwidth: metadata.bandwidth.max(20),
-                flags: metadata.flags | flags,
+                bandwidth: metadata.bandwidth,
+                flags: metadata.flags,
                 frequency: metadata.frequency,
                 hw_address: hardware_address,
                 last_seen: metadata.last_seen,
                 max_bitrate: metadata.max_bitrate,
                 mode: NM80211Mode::Infra,
                 path: path.clone(),
-                rsn_flags: metadata.rsn_flags | rsn_flags,
+                rsn_flags: metadata.rsn_flags,
                 runtime: runtime.clone(),
                 ssid: network.name.clone(),
-                strength: signal_to_strength(ordered_network.signal),
-                wpa_flags: metadata.wpa_flags | wpa_flags,
+                strength: metadata.strength,
+                wpa_flags: metadata.wpa_flags,
             };
             runtime.upsert_access_point(AccessPointRecord {
                 bandwidth: access_point.bandwidth,
@@ -329,18 +324,22 @@ pub async fn start_service_with_runtime(
     for link in &manager.links {
         let current_hardware_address = mac_string(&link.description.hardware_address);
         let permanent_hardware_address = mac_string(&link.description.permanent_hardware_address);
-        let (driver_version, firmware_version) = ethtool_info(&link.description.name);
+        let (driver_version, firmware_version) =
+            sysfs_driver_and_firmware_info(&link.description.name, &link.description.driver);
         let ip4_config_path = register_ip4_config(server, link).await?;
         let ip6_config_path = register_ip6_config(server, link).await?;
         let dhcp4_config_path = register_dhcp4_config(server, link).await?;
         let dhcp6_config_path = register_dhcp6_config(server, link).await?;
         let device_path = device_object_path(&link.description.name);
-        let wired_settings_path = wired_settings_by_interface.get(&link.description.name).cloned();
+        let wired_settings_path = wired_settings_by_interface
+            .get(&link.description.name)
+            .cloned();
 
         let (available_connections, wireless_data, settings_path) =
             if link.description.r#type == Type::Wlan {
                 let station_device = wireless.device_by_name(&link.description.name);
-                let station = station_device.and_then(|device| wireless.station_by_device_path(&device.path));
+                let station =
+                    station_device.and_then(|device| wireless.station_by_device_path(&device.path));
                 let active_access_point = station
                     .and_then(|station| station.connected_network.as_ref())
                     .and_then(|network_path| access_point_by_network_path.get(network_path))
@@ -364,12 +363,16 @@ pub async fn start_service_with_runtime(
                     .saturating_div(1000)
                     .try_into()
                     .unwrap_or(u32::MAX);
-                let station_path = station.map(|station| station.path.clone()).unwrap_or_else(root_path);
+                let station_path = station
+                    .map(|station| station.path.clone())
+                    .unwrap_or_else(root_path);
                 let connected_settings = station
                     .and_then(|station| station.connected_network.as_ref())
                     .and_then(|network_path| wireless.network_by_path(network_path))
                     .and_then(|network| {
-                        known_network_to_settings_path.get(&network.known_network).cloned()
+                        known_network_to_settings_path
+                            .get(&network.known_network)
+                            .cloned()
                     });
                 let last_scan = if station.is_some() { 0 } else { -1 };
                 let wireless_data = DeviceWireless {
@@ -398,7 +401,11 @@ pub async fn start_service_with_runtime(
                     connected_settings,
                 )
             } else {
-                (wired_settings_path.clone().into_iter().collect(), None, wired_settings_path)
+                (
+                    wired_settings_path.clone().into_iter().collect(),
+                    None,
+                    wired_settings_path,
+                )
             };
 
         let is_active = link_is_active(link);
@@ -406,8 +413,9 @@ pub async fn start_service_with_runtime(
             let path = active_connection_object_path(&link.description.name);
             if primary_connection == root_path() {
                 primary_connection = path.clone();
-                primary_connection_type =
-                    connection_type_for_link(link).unwrap_or("generic").to_string();
+                primary_connection_type = connection_type_for_link(link)
+                    .unwrap_or("generic")
+                    .to_string();
             }
             Some(path)
         } else {
@@ -421,9 +429,7 @@ pub async fn start_service_with_runtime(
         };
 
         let device = Device {
-            active_connection: active_connection_path
-                .clone()
-                .unwrap_or_else(root_path),
+            active_connection: active_connection_path.clone().unwrap_or_else(root_path),
             autoconnect: true,
             available_connections,
             capabilities: device_capabilities(link),
@@ -496,8 +502,8 @@ pub async fn start_service_with_runtime(
                 }
                 if link.description.wireless_lan_interface_type == "p2p-device" {
                     let station_device = wireless.device_by_name(&link.description.name);
-                    let station =
-                        station_device.and_then(|device| wireless.station_by_device_path(&device.path));
+                    let station = station_device
+                        .and_then(|device| wireless.station_by_device_path(&device.path));
                     if let Some(station) = station {
                         for ordered in &station.ordered_networks {
                             if let Some(network) = wireless.network_by_path(&ordered.path) {
@@ -511,7 +517,9 @@ pub async fn start_service_with_runtime(
                                             hw_address: network
                                                 .extended_service_set
                                                 .first()
-                                                .and_then(|path| wireless.basic_service_set_by_path(path))
+                                                .and_then(|path| {
+                                                    wireless.basic_service_set_by_path(path)
+                                                })
                                                 .map(|bss| bss.address.clone())
                                                 .unwrap_or_default(),
                                             last_seen: 0,
@@ -552,7 +560,8 @@ pub async fn start_service_with_runtime(
             dhcp4_config: dhcp4_config_path.clone(),
             dhcp6_config: dhcp6_config_path.clone(),
             interface_name: link.description.name.clone(),
-            is_ppp: link.description.name.starts_with("ppp") || link.description.r#type == Type::Ppp,
+            is_ppp: link.description.name.starts_with("ppp")
+                || link.description.r#type == Type::Ppp,
             ip4_config: ip4_config_path.clone(),
             ip6_config: ip6_config_path.clone(),
             kind: link.description.kind,
@@ -597,7 +606,9 @@ pub async fn start_service_with_runtime(
                         link_has_ipv4(link),
                         link_has_global_ipv6(link),
                     ),
-                    type_: connection_type_for_link(link).unwrap_or("generic").to_string(),
+                    type_: connection_type_for_link(link)
+                        .unwrap_or("generic")
+                        .to_string(),
                     uuid: connection_uuid(link, settings_path.as_ref()),
                     vpn: false,
                 },
@@ -880,7 +891,8 @@ fn active_connection_id(
                 if let Some(station) = wireless.station_by_device_path(&station_device.path) {
                     if let Some(network_path) = &station.connected_network {
                         if let Some(network) = wireless.network_by_path(network_path) {
-                            if let Some(known) = wireless.known_network_by_path(&network.known_network)
+                            if let Some(known) =
+                                wireless.known_network_by_path(&network.known_network)
                             {
                                 return known.name.clone();
                             }
@@ -921,7 +933,12 @@ fn device_type_for_link(link: &Link) -> NMDeviceType {
     NMDeviceType::from((link.description.kind, link.description.r#type))
 }
 
-fn device_interface_names(kind: Kind, type_: Type, wifi_p2p: bool, is_ppp: bool) -> Vec<&'static str> {
+fn device_interface_names(
+    kind: Kind,
+    type_: Type,
+    wifi_p2p: bool,
+    is_ppp: bool,
+) -> Vec<&'static str> {
     let mut names = vec!["org.freedesktop.NetworkManager.Device"];
     match type_ {
         Type::Loopback => names.push("org.freedesktop.NetworkManager.Device.Loopback"),
@@ -976,10 +993,7 @@ async fn remove_config_object(
     let _ = emit_object_removed(service_bus, path, interface_name).await;
 }
 
-async fn emit_added_config_if_needed(
-    service_bus: &Connection,
-    path: &OwnedObjectPath,
-) {
+async fn emit_added_config_if_needed(service_bus: &Connection, path: &OwnedObjectPath) {
     if path == &root_path() {
         return;
     }
@@ -997,23 +1011,24 @@ async fn emit_added_config_if_needed(
     let _ = emit_object_added(service_bus, path, interface_name).await;
 }
 
-async fn unregister_device_objects(
-    server: &zbus::ObjectServer,
-    record: &DeviceRecord,
-) {
+async fn unregister_device_objects(server: &zbus::ObjectServer, record: &DeviceRecord) {
     for peer in &record.p2p_peers {
         let _ = server.remove::<WifiP2PPeer, _>(peer.as_str()).await;
     }
     unregister_device_aux_interfaces(server, &record.path, record.kind, record.type_).await;
     match record.type_ {
         Type::Loopback => {
-            let _ = server.remove::<DeviceLoopback, _>(record.path.as_str()).await;
+            let _ = server
+                .remove::<DeviceLoopback, _>(record.path.as_str())
+                .await;
         }
         Type::Ether => {
             let _ = server.remove::<DeviceWired, _>(record.path.as_str()).await;
         }
         Type::Wlan => {
-            let _ = server.remove::<DeviceWireless, _>(record.path.as_str()).await;
+            let _ = server
+                .remove::<DeviceWireless, _>(record.path.as_str())
+                .await;
         }
         _ => {}
     }
@@ -1030,7 +1045,12 @@ async fn sync_device_object(
     runtime: &Runtime,
     link: &Link,
     wireless: &IwdState,
-) -> Result<(OwnedObjectPath, bool, Vec<OwnedObjectPath>, Vec<OwnedObjectPath>)> {
+) -> Result<(
+    OwnedObjectPath,
+    bool,
+    Vec<OwnedObjectPath>,
+    Vec<OwnedObjectPath>,
+)> {
     let device_path = device_object_path(&link.description.name);
     let existing = runtime.device(&device_path);
     if let Some(record) = &existing {
@@ -1039,7 +1059,8 @@ async fn sync_device_object(
 
     let current_hardware_address = mac_string(&link.description.hardware_address);
     let permanent_hardware_address = mac_string(&link.description.permanent_hardware_address);
-    let (driver_version, firmware_version) = ethtool_info(&link.description.name);
+    let (driver_version, firmware_version) =
+        sysfs_driver_and_firmware_info(&link.description.name, &link.description.driver);
     let ip4_config_path = register_ip4_config(server, link).await?;
     let ip6_config_path = register_ip6_config(server, link).await?;
     let dhcp4_config_path = register_dhcp4_config(server, link).await?;
@@ -1177,7 +1198,8 @@ async fn sync_device_object(
         }
         Type::Wlan => {
             let station_device = wireless.device_by_name(&link.description.name);
-            let station = station_device.and_then(|device| wireless.station_by_device_path(&device.path));
+            let station =
+                station_device.and_then(|device| wireless.station_by_device_path(&device.path));
             let access_points = station
                 .map(|station| {
                     station
@@ -1191,14 +1213,13 @@ async fn sync_device_object(
                 .and_then(|station| station.connected_network.as_ref())
                 .map(access_point_path)
                 .unwrap_or_else(root_path);
-            let bitrate = iw_link_bitrate(&link.description.name).unwrap_or(
-                link.bit_rates
-                    .0
-                    .max(link.bit_rates.1)
-                    .saturating_div(1000)
-                    .try_into()
-                    .unwrap_or(u32::MAX),
-            );
+            let bitrate = link
+                .bit_rates
+                .0
+                .max(link.bit_rates.1)
+                .saturating_div(1000)
+                .try_into()
+                .unwrap_or(u32::MAX);
             let last_scan = if station.is_some() { 0 } else { -1 };
             let wireless_data = DeviceWireless {
                 access_points: access_points.clone(),
@@ -1227,7 +1248,8 @@ async fn sync_device_object(
                         .iter()
                         .filter_map(|ordered| {
                             let network = wireless.network_by_path(&ordered.path)?;
-                            let peer_path = wifi_p2p_peer_path(&link.description.name, &ordered.path);
+                            let peer_path =
+                                wifi_p2p_peer_path(&link.description.name, &ordered.path);
                             let hw_address = network
                                 .extended_service_set
                                 .first()
@@ -1255,10 +1277,11 @@ async fn sync_device_object(
                         server.at(path.as_str(), peer).await?;
                         p2p_peers.push(path);
                     }
-                    let _ = server.remove::<network_manager::device::specialized::DeviceWifiP2P, _>(
-                        device_path.as_str(),
-                    )
-                    .await;
+                    let _ = server
+                        .remove::<network_manager::device::specialized::DeviceWifiP2P, _>(
+                            device_path.as_str(),
+                        )
+                        .await;
                     server
                         .at(
                             device_path.as_str(),
@@ -1412,7 +1435,11 @@ fn build_wifi_settings(
     settings
 }
 
-fn build_link_settings(interface_name: &str, connection_type: &str, uuid: &str) -> ConnectionSettings {
+fn build_link_settings(
+    interface_name: &str,
+    connection_type: &str,
+    uuid: &str,
+) -> ConnectionSettings {
     let mut settings = HashMap::from([
         (
             String::from("connection"),
@@ -1450,8 +1477,14 @@ fn connection_type_for_link(link: &Link) -> Option<&'static str> {
         Kind::Bridge => Some("bridge"),
         Kind::Dummy => Some("dummy"),
         Kind::Hsr => Some("hsr"),
-        Kind::Geneve | Kind::Gre | Kind::Gretap | Kind::Ip6gre | Kind::Ip6gretap
-        | Kind::Ip6tnl | Kind::Ipip | Kind::Sit => Some("ip-tunnel"),
+        Kind::Geneve
+        | Kind::Gre
+        | Kind::Gretap
+        | Kind::Ip6gre
+        | Kind::Ip6gretap
+        | Kind::Ip6tnl
+        | Kind::Ipip
+        | Kind::Sit => Some("ip-tunnel"),
         Kind::Ipvlan => Some("ipvlan"),
         Kind::Lowpan => Some("6lowpan"),
         Kind::Macsec => Some("macsec"),
@@ -1692,15 +1725,15 @@ pub async fn sync_backends(
             matches!(
                 connection.origin,
                 runtime::ConnectionOrigin::BackendWifi | runtime::ConnectionOrigin::BackendWired
-            ) && !desired_backend_uuids.iter().any(|uuid| uuid == &connection.uuid)
+            ) && !desired_backend_uuids
+                .iter()
+                .any(|uuid| uuid == &connection.uuid)
         })
         .map(|connection| connection.path)
         .collect::<Vec<_>>();
     for path in stale_backend {
         runtime.remove_connection(&path);
-        let _ = server
-            .remove::<SettingsConnection, _>(path.as_str())
-            .await;
+        let _ = server.remove::<SettingsConnection, _>(path.as_str()).await;
         let _ = emit_object_removed(
             service_bus,
             &path,
@@ -1710,7 +1743,6 @@ pub async fn sync_backends(
     }
 
     let mut desired_ap_paths = Vec::new();
-    let mut scan_cache = HashMap::new();
     for station in &wireless.stations {
         for ordered_network in &station.ordered_networks {
             let Some(network) = wireless.network_by_path(&ordered_network.path) else {
@@ -1728,28 +1760,25 @@ pub async fn sync_backends(
                 .find(|device| device.path == network.device)
                 .map(|device| device.name.clone())
                 .unwrap_or_default();
-            let metadata = scan_cache
-                .entry(interface_name.clone())
-                .or_insert_with_key(|interface_name| iw_scan_metadata(interface_name))
-                .get(&hardware_address.to_ascii_lowercase())
-                .cloned()
-                .unwrap_or_default();
-            let (flags, wpa_flags, rsn_flags) = ap_security_flags(network.kind.as_str());
+            let mut metadata = synthetic_ap_metadata(network.kind.as_str());
+            metadata.hw_address = hardware_address.clone();
+            metadata.ssid = network.name.clone();
+            metadata.strength = signal_to_strength(ordered_network.signal);
             let path = access_point_path(&ordered_network.path);
             desired_ap_paths.push(path.clone());
             let record = AccessPointRecord {
-                bandwidth: metadata.bandwidth.max(20),
-                flags: metadata.flags | flags,
+                bandwidth: metadata.bandwidth,
+                flags: metadata.flags,
                 frequency: metadata.frequency,
                 hw_address: hardware_address,
                 last_seen: metadata.last_seen,
                 max_bitrate: metadata.max_bitrate,
                 mode: NM80211Mode::Infra,
                 path: path.clone(),
-                rsn_flags: metadata.rsn_flags | rsn_flags,
+                rsn_flags: metadata.rsn_flags,
                 ssid: network.name.clone(),
-                strength: signal_to_strength(ordered_network.signal),
-                wpa_flags: metadata.wpa_flags | wpa_flags,
+                strength: metadata.strength,
+                wpa_flags: metadata.wpa_flags,
             };
             let is_new = runtime.access_point(&path).is_none();
             runtime.upsert_access_point(record.clone());
@@ -1820,7 +1849,10 @@ pub async fn sync_backends(
         .collect::<Vec<_>>();
     let root_emitter = SignalEmitter::new(service_bus, NM_ROOT_PATH)?;
     for path in runtime.device_paths() {
-        if desired_device_paths.iter().any(|candidate| candidate == &path) {
+        if desired_device_paths
+            .iter()
+            .any(|candidate| candidate == &path)
+        {
             continue;
         }
         if let Some(record) = runtime.remove_device(&path) {
@@ -1908,9 +1940,17 @@ pub async fn sync_backends(
                     .and_then(|device| wireless.station_by_device_path(&device.path))
                     .and_then(|station| station.connected_network.as_ref())
                     .and_then(|network_path| wireless.network_by_path(network_path))
-                    .and_then(|network| runtime.connection_by_uuid(&deterministic_uuid("wifi", network.known_network.as_str())))
+                    .and_then(|network| {
+                        runtime.connection_by_uuid(&deterministic_uuid(
+                            "wifi",
+                            network.known_network.as_str(),
+                        ))
+                    })
             } else {
-                runtime.connection_by_uuid(&deterministic_uuid(link_uuid_namespace(link), &link.description.name))
+                runtime.connection_by_uuid(&deterministic_uuid(
+                    link_uuid_namespace(link),
+                    &link.description.name,
+                ))
             }?;
             Some((
                 active_connection_object_path(&link.description.name),
@@ -1925,22 +1965,28 @@ pub async fn sync_backends(
         .filter(|link| link.description.r#type == Type::Wlan)
     {
         let station_device = wireless.device_by_name(&link.description.name);
-        let station = station_device.and_then(|device| wireless.station_by_device_path(&device.path));
+        let station =
+            station_device.and_then(|device| wireless.station_by_device_path(&device.path));
         let active_access_point = station
             .and_then(|station| station.connected_network.as_ref())
             .map(access_point_path)
             .unwrap_or_else(root_path);
         let access_points = station
-            .map(|station| station.ordered_networks.iter().map(|ordered| access_point_path(&ordered.path)).collect())
+            .map(|station| {
+                station
+                    .ordered_networks
+                    .iter()
+                    .map(|ordered| access_point_path(&ordered.path))
+                    .collect()
+            })
             .unwrap_or_default();
-        let bitrate = iw_link_bitrate(&link.description.name).unwrap_or(
-            link.bit_rates
-                .0
-                .max(link.bit_rates.1)
-                .saturating_div(1000)
-                .try_into()
-                .unwrap_or(u32::MAX),
-        );
+        let bitrate = link
+            .bit_rates
+            .0
+            .max(link.bit_rates.1)
+            .saturating_div(1000)
+            .try_into()
+            .unwrap_or(u32::MAX);
         runtime.upsert_wireless_device(WirelessDeviceRecord {
             access_points,
             active_access_point,
@@ -1994,9 +2040,13 @@ pub async fn sync_backends(
         }
     }
 
-    let _ = crate::network_manager::settings::emit_settings_changed(service_bus, runtime, None).await;
+    let _ =
+        crate::network_manager::settings::emit_settings_changed(service_bus, runtime, None).await;
     let root_changed = HashMap::from([
-        ("ActiveConnections", Value::from(runtime.active_connection_paths())),
+        (
+            "ActiveConnections",
+            Value::from(runtime.active_connection_paths()),
+        ),
         (
             "Connectivity",
             Value::from(
@@ -2058,128 +2108,12 @@ async fn signal_streams(system_bus: &Connection) -> zbus::Result<SelectAll<Messa
     Ok(streams)
 }
 
-#[derive(Clone, Debug, Default)]
-struct IwAccessPointMetadata {
-    bandwidth: u32,
-    flags: u32,
-    frequency: u32,
-    last_seen: i32,
-    max_bitrate: u32,
-    rsn_flags: u32,
-    wpa_flags: u32,
-}
-
 fn deterministic_uuid(namespace: &str, value: &str) -> String {
     Uuid::new_v5(
         &Uuid::NAMESPACE_URL,
         format!("nm-dbus-proxy:{namespace}:{value}").as_bytes(),
     )
     .to_string()
-}
-
-fn iw_bin() -> String {
-    crate::config::current().iw_bin
-}
-
-fn iw_link_bitrate(interface_name: &str) -> Option<u32> {
-    let output = std::process::Command::new(iw_bin())
-        .args(["dev", interface_name, "link"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        let line = line.trim();
-        if let Some(value) = line.strip_prefix("tx bitrate:") {
-            let rate = value
-                .split_whitespace()
-                .next()
-                .and_then(|value| value.parse::<f64>().ok())?;
-            return Some((rate * 1000.0).round() as u32);
-        }
-    }
-
-    None
-}
-
-fn iw_scan_metadata(interface_name: &str) -> HashMap<String, IwAccessPointMetadata> {
-    let Ok(output) = std::process::Command::new(iw_bin())
-        .args(["dev", interface_name, "scan", "dump"])
-        .output()
-    else {
-        return HashMap::new();
-    };
-    if !output.status.success() {
-        return HashMap::new();
-    }
-
-    let mut out = HashMap::new();
-    let mut current_bssid = String::new();
-    let mut current = IwAccessPointMetadata::default();
-
-    let flush = |out: &mut HashMap<String, IwAccessPointMetadata>,
-                 current_bssid: &mut String,
-                 current: &mut IwAccessPointMetadata| {
-        if !current_bssid.is_empty() {
-            out.insert(current_bssid.clone(), current.clone());
-            *current_bssid = String::new();
-            *current = IwAccessPointMetadata::default();
-        }
-    };
-
-    for raw_line in String::from_utf8_lossy(&output.stdout).lines() {
-        let line = raw_line.trim();
-        if let Some(rest) = line.strip_prefix("BSS ") {
-            flush(&mut out, &mut current_bssid, &mut current);
-            current_bssid = rest
-                .split_whitespace()
-                .next()
-                .unwrap_or_default()
-                .split('(')
-                .next()
-                .unwrap_or_default()
-                .to_ascii_lowercase();
-            continue;
-        }
-        if current_bssid.is_empty() {
-            continue;
-        }
-
-        if let Some(value) = line.strip_prefix("freq:") {
-            current.frequency = value.trim().parse::<u32>().unwrap_or_default();
-        } else if let Some(value) = line.strip_prefix("last seen:") {
-            current.last_seen = value
-                .split_whitespace()
-                .next()
-                .and_then(|value| value.parse::<i32>().ok())
-                .map(|value| -value)
-                .unwrap_or(-1);
-        } else if let Some(value) = line.strip_prefix("* channel width:") {
-            current.bandwidth = value
-                .split_whitespace()
-                .next()
-                .and_then(|value| value.parse::<u32>().ok())
-                .unwrap_or(current.bandwidth);
-        } else if let Some(value) = line.strip_prefix("max bitrate:") {
-            current.max_bitrate = value
-                .split_whitespace()
-                .next()
-                .and_then(|value| value.parse::<f64>().ok())
-                .map(|value| (value * 1000.0).round() as u32)
-                .unwrap_or(current.max_bitrate);
-        } else if line == "RSN:" {
-            current.flags = 1;
-            current.rsn_flags = 1;
-        } else if line == "WPA:" {
-            current.flags = 1;
-            current.wpa_flags = 1;
-        }
-    }
-
-    flush(&mut out, &mut current_bssid, &mut current);
-    out
 }
 
 fn ap_security_flags(kind: &str) -> (u32, u32, u32) {
@@ -2199,10 +2133,31 @@ fn ap_security_flags(kind: &str) -> (u32, u32, u32) {
     }
 }
 
+fn synthetic_ap_metadata(kind: &str) -> AccessPointRecord {
+    let (flags, wpa_flags, rsn_flags) = ap_security_flags(kind);
+    AccessPointRecord {
+        bandwidth: 20,
+        flags,
+        frequency: 0,
+        hw_address: String::new(),
+        last_seen: 0,
+        max_bitrate: 0,
+        mode: NM80211Mode::Infra,
+        path: root_path(),
+        rsn_flags,
+        ssid: String::new(),
+        strength: 0,
+        wpa_flags,
+    }
+}
+
 fn device_capabilities(link: &Link) -> u32 {
     let mut capabilities = NMDeviceCapabilities::NMSupported as u32;
 
-    if matches!(link.description.r#type, Type::Ether | Type::Wlan | Type::Wwan) {
+    if matches!(
+        link.description.r#type,
+        Type::Ether | Type::Wlan | Type::Wwan
+    ) {
         capabilities |= NMDeviceCapabilities::CarrierDetect as u32;
     }
     if matches!(
@@ -2216,15 +2171,14 @@ fn device_capabilities(link: &Link) -> u32 {
     capabilities
 }
 
-fn wireless_capabilities(
-    link: &Link,
-    access_points: &[OwnedObjectPath],
-    runtime: &Runtime,
-) -> u32 {
-    let mut capabilities = (NMDeviceWifiCapabilities::FreqValid as u32)
-        | (NMDeviceWifiCapabilities::Freq2Ghz as u32);
+fn wireless_capabilities(link: &Link, access_points: &[OwnedObjectPath], runtime: &Runtime) -> u32 {
+    let mut capabilities =
+        (NMDeviceWifiCapabilities::FreqValid as u32) | (NMDeviceWifiCapabilities::Freq2Ghz as u32);
 
-    if matches!(link.description.wireless_lan_interface_type.as_str(), "station" | "ap") {
+    if matches!(
+        link.description.wireless_lan_interface_type.as_str(),
+        "station" | "ap"
+    ) {
         capabilities |= NMDeviceWifiCapabilities::Ap as u32;
     }
     if access_points.iter().any(|path| {
@@ -2275,7 +2229,10 @@ fn link_has_global_ipv6(link: &Link) -> bool {
 }
 
 fn link_has_ipv4(link: &Link) -> bool {
-    link.description.addresses.iter().any(|address| address.family == 2)
+    link.description
+        .addresses
+        .iter()
+        .any(|address| address.family == 2)
 }
 
 fn wired_speed_mbps(link: &Link) -> u32 {
@@ -2359,10 +2316,7 @@ fn radio_flags(manager: &Manager, wireless: &IwdState) -> u32 {
     flags
 }
 
-async fn register_ip4_config(
-    server: &zbus::ObjectServer,
-    link: &Link,
-) -> Result<OwnedObjectPath> {
+async fn register_ip4_config(server: &zbus::ObjectServer, link: &Link) -> Result<OwnedObjectPath> {
     let Some(config) = ip4_config(link) else {
         return Ok(root_path());
     };
@@ -2374,10 +2328,7 @@ async fn register_ip4_config(
     Ok(path)
 }
 
-async fn register_ip6_config(
-    server: &zbus::ObjectServer,
-    link: &Link,
-) -> Result<OwnedObjectPath> {
+async fn register_ip6_config(server: &zbus::ObjectServer, link: &Link) -> Result<OwnedObjectPath> {
     let Some(config) = ip6_config(link) else {
         return Ok(root_path());
     };
@@ -2453,29 +2404,74 @@ fn synthetic_networkd_filename(link: &Link, connection_type: &str) -> String {
         .to_string()
 }
 
-fn ethtool_info(interface_name: &str) -> (String, String) {
-    let Ok(output) = std::process::Command::new("ethtool")
-        .args(["-i", interface_name])
-        .output()
-    else {
-        return (String::new(), String::new());
-    };
-    if !output.status.success() {
-        return (String::new(), String::new());
-    }
+fn sysfs_driver_and_firmware_info(interface_name: &str, driver_name: &str) -> (String, String) {
+    (
+        sysfs_driver_version(Path::new("/sys"), interface_name, driver_name).unwrap_or_default(),
+        sysfs_firmware_version(Path::new("/sys"), interface_name).unwrap_or_default(),
+    )
+}
 
-    let mut driver_version = String::new();
-    let mut firmware_version = String::new();
-    for raw_line in String::from_utf8_lossy(&output.stdout).lines() {
-        let line = raw_line.trim();
-        if let Some(value) = line.strip_prefix("version:") {
-            driver_version = value.trim().to_string();
-        } else if let Some(value) = line.strip_prefix("firmware-version:") {
-            firmware_version = value.trim().to_string();
+fn sysfs_driver_version(
+    sysfs_root: &Path,
+    interface_name: &str,
+    driver_name: &str,
+) -> Option<String> {
+    let net_root = sysfs_root.join("class/net").join(interface_name);
+    read_trimmed_sysfs(&net_root.join("device/driver/module/version")).or_else(|| {
+        let module_name = fs::read_link(net_root.join("device/driver/module"))
+            .ok()
+            .and_then(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .or_else(|| {
+                if driver_name.is_empty() {
+                    None
+                } else {
+                    Some(driver_name.to_string())
+                }
+            })?;
+        read_trimmed_sysfs(&sysfs_root.join("module").join(module_name).join("version"))
+    })
+}
+
+fn sysfs_firmware_version(sysfs_root: &Path, interface_name: &str) -> Option<String> {
+    let device_root = sysfs_root
+        .join("class/net")
+        .join(interface_name)
+        .join("device");
+    for candidate in [
+        "firmware_version",
+        "firmware_rev",
+        "fw_version",
+        "fw_rev",
+        "fwver",
+        "fw_ver",
+    ] {
+        if let Some(value) = read_trimmed_sysfs(&device_root.join(candidate)) {
+            return Some(value);
         }
     }
 
-    (driver_version, firmware_version)
+    let infiniband_root = device_root.join("infiniband");
+    let entries = fs::read_dir(infiniband_root).ok()?;
+    for entry in entries.flatten() {
+        if let Some(value) = read_trimmed_sysfs(&entry.path().join("fw_ver")) {
+            return Some(value);
+        }
+    }
+
+    None
+}
+
+fn read_trimmed_sysfs(path: &Path) -> Option<String> {
+    let value = fs::read_to_string(path).ok()?;
+    let value = value.trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
 }
 
 fn ip4_address_data(address: &Address) -> HashMap<String, OwnedValue> {
@@ -2505,9 +2501,7 @@ fn ip4_config(link: &Link) -> Option<Ip4Config> {
     let nameserver_data = nameservers
         .iter()
         .copied()
-        .map(|address| {
-            HashMap::from([(String::from("address"), owned(u32_to_ipv4(address)))])
-        })
+        .map(|address| HashMap::from([(String::from("address"), owned(u32_to_ipv4(address)))]))
         .collect::<Vec<_>>();
     let domains = crate::network_manager::dns_manager::current_domains();
 
@@ -2523,7 +2517,10 @@ fn ip4_config(link: &Link) -> Option<Ip4Config> {
                     .map(|value| vec![value, u32::from(address.prefix_length), 0])
             })
             .collect(),
-        address_data: ipv4_addresses.iter().map(|address| ip4_address_data(address)).collect(),
+        address_data: ipv4_addresses
+            .iter()
+            .map(|address| ip4_address_data(address))
+            .collect(),
         dns_options: Vec::new(),
         dns_priority: 0,
         domains: domains.clone(),
@@ -2559,12 +2556,14 @@ fn ip6_config(link: &Link) -> Option<Ip6Config> {
         addresses: ipv6_addresses
             .iter()
             .filter_map(|address| {
-                ipv6_to_bytes(&address.address_string).map(|value| {
-                    (value, u32::from(address.prefix_length), Vec::new())
-                })
+                ipv6_to_bytes(&address.address_string)
+                    .map(|value| (value, u32::from(address.prefix_length), Vec::new()))
             })
             .collect(),
-        address_data: ipv6_addresses.iter().map(|address| ip6_address_data(address)).collect(),
+        address_data: ipv6_addresses
+            .iter()
+            .map(|address| ip6_address_data(address))
+            .collect(),
         dns_options: Vec::new(),
         dns_priority: 0,
         domains: domains.clone(),
@@ -2641,4 +2640,60 @@ fn u32_to_ipv4(value: u32) -> String {
 fn ipv6_to_bytes(value: &str) -> Option<Vec<u8>> {
     let addr = value.parse::<std::net::Ipv6Addr>().ok()?;
     Some(addr.octets().to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        path::PathBuf,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::{sysfs_driver_version, sysfs_firmware_version};
+
+    fn temp_root(name: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be monotonic enough for tests")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("nm-dbus-proxy-{name}-{unique}"));
+        std::fs::create_dir_all(&root).expect("test temp root should be created");
+        root
+    }
+
+    #[test]
+    fn sysfs_driver_version_reads_module_version() {
+        let root = temp_root("driver-version");
+        let version_path = root.join("class/net/eth0/device/driver/module/version");
+        std::fs::create_dir_all(
+            version_path
+                .parent()
+                .expect("version path should have a parent directory"),
+        )
+        .expect("driver tree should be created");
+        std::fs::write(&version_path, "1.2.3\n").expect("driver version should be written");
+
+        assert_eq!(
+            sysfs_driver_version(&root, "eth0", "e1000e"),
+            Some(String::from("1.2.3"))
+        );
+    }
+
+    #[test]
+    fn sysfs_firmware_version_reads_common_firmware_files() {
+        let root = temp_root("firmware-version");
+        let firmware_path = root.join("class/net/wlan0/device/fw_version");
+        std::fs::create_dir_all(
+            firmware_path
+                .parent()
+                .expect("firmware path should have a parent directory"),
+        )
+        .expect("firmware tree should be created");
+        std::fs::write(&firmware_path, "9.9.9\n").expect("firmware version should be written");
+
+        assert_eq!(
+            sysfs_firmware_version(&root, "wlan0"),
+            Some(String::from("9.9.9"))
+        );
+    }
 }

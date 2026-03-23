@@ -17,3 +17,5 @@ uuid = { version = "1.18.1", features = ["v5"] }
 zbus = { version = "5.5.0", default-features = false, features = ["tokio"] }
 zbus_systemd = { version = "0.25901.0", features = ["network1"] }
 futures-util = "0.3.31"
+rtnetlink = "0.14.1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }

@@ -32,7 +32,10 @@ impl Checkpoint {
     #[zbus(property)]
     fn rollback_timeout(&self) -> u32 {
         self.runtime
-            .checkpoint_rollback_timeout(&self.path, crate::network_manager::current_boottime_millis())
+            .checkpoint_rollback_timeout(
+                &self.path,
+                crate::network_manager::current_boottime_millis(),
+            )
             .unwrap_or(self.rollback_timeout)
     }
 }

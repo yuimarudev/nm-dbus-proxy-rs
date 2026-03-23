@@ -1,10 +1,15 @@
-use std::{collections::HashMap, sync::{Arc, Mutex}};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 
 use crate::{
     enums::NM80211Mode,
-    network_manager::{active_connection::ActiveConnection, settings_connection::ConnectionSettings},
+    network_manager::{
+        active_connection::ActiveConnection, settings_connection::ConnectionSettings,
+    },
     systemd_networkd::link::{Kind, Type},
 };
 
@@ -293,9 +298,7 @@ impl Runtime {
     }
 
     pub fn logging(&self) -> (String, String) {
-        self.with_state(|state| {
-            (state.logging_level.clone(), state.logging_domains.clone())
-        })
+        self.with_state(|state| (state.logging_level.clone(), state.logging_domains.clone()))
     }
 
     pub fn networking_enabled(&self) -> bool {
@@ -453,7 +456,10 @@ impl Runtime {
 
     pub fn remove_connection(&self, path: &OwnedObjectPath) -> Option<ConnectionRecord> {
         self.with_state(|state| {
-            let position = state.connections.iter().position(|record| &record.path == path)?;
+            let position = state
+                .connections
+                .iter()
+                .position(|record| &record.path == path)?;
             state.version_id += 1;
             Some(state.connections.remove(position))
         })
@@ -461,7 +467,10 @@ impl Runtime {
 
     pub fn remove_device(&self, path: &OwnedObjectPath) -> Option<DeviceRecord> {
         self.with_state(|state| {
-            let position = state.devices.iter().position(|record| &record.path == path)?;
+            let position = state
+                .devices
+                .iter()
+                .position(|record| &record.path == path)?;
             Some(state.devices.remove(position))
         })
     }
@@ -555,7 +564,10 @@ impl Runtime {
         F: FnOnce(&mut ConnectionRecord) -> T,
     {
         self.with_state(|state| {
-            let record = state.connections.iter_mut().find(|record| &record.path == path)?;
+            let record = state
+                .connections
+                .iter_mut()
+                .find(|record| &record.path == path)?;
             let result = update(record);
             state.version_id += 1;
             Some(result)
@@ -619,15 +631,20 @@ impl Runtime {
         })
     }
 
-    pub fn checkpoint_rollback_timeout(&self, path: &OwnedObjectPath, now_millis: i64) -> Option<u32> {
+    pub fn checkpoint_rollback_timeout(
+        &self,
+        path: &OwnedObjectPath,
+        now_millis: i64,
+    ) -> Option<u32> {
         self.with_state(|state| {
-            let record = state.checkpoints.iter().find(|record| &record.path == path)?;
+            let record = state
+                .checkpoints
+                .iter()
+                .find(|record| &record.path == path)?;
             Some(match record.rollback_deadline_millis {
-                Some(deadline) if deadline > now_millis => {
-                    ((deadline - now_millis + 999) / 1000)
-                        .try_into()
-                        .unwrap_or(u32::MAX)
-                }
+                Some(deadline) if deadline > now_millis => ((deadline - now_millis + 999) / 1000)
+                    .try_into()
+                    .unwrap_or(u32::MAX),
                 Some(_) => 0,
                 None => record.rollback_timeout,
             })

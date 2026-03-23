@@ -5,8 +5,11 @@ use std::{
 };
 
 use anyhow::Result;
-use zbus::{fdo, interface, object_server::{ObjectServer, SignalEmitter}};
 use zbus::zvariant::OwnedObjectPath;
+use zbus::{
+    fdo, interface,
+    object_server::{ObjectServer, SignalEmitter},
+};
 
 use crate::systemd_networkd::link::{Kind, Link, Type};
 
@@ -162,21 +165,48 @@ impl DeviceWireGuard {
 }
 
 empty_device_interface!(DeviceAdsl, "org.freedesktop.NetworkManager.Device.Adsl");
-empty_device_interface!(DeviceBluetooth, "org.freedesktop.NetworkManager.Device.Bluetooth");
+empty_device_interface!(
+    DeviceBluetooth,
+    "org.freedesktop.NetworkManager.Device.Bluetooth"
+);
 empty_device_interface!(DeviceDummy, "org.freedesktop.NetworkManager.Device.Dummy");
-empty_device_interface!(DeviceGeneric, "org.freedesktop.NetworkManager.Device.Generic");
+empty_device_interface!(
+    DeviceGeneric,
+    "org.freedesktop.NetworkManager.Device.Generic"
+);
 empty_device_interface!(DeviceHsr, "org.freedesktop.NetworkManager.Device.Hsr");
-empty_device_interface!(DeviceIPTunnel, "org.freedesktop.NetworkManager.Device.IPTunnel");
-empty_device_interface!(DeviceInfiniband, "org.freedesktop.NetworkManager.Device.Infiniband");
+empty_device_interface!(
+    DeviceIPTunnel,
+    "org.freedesktop.NetworkManager.Device.IPTunnel"
+);
+empty_device_interface!(
+    DeviceInfiniband,
+    "org.freedesktop.NetworkManager.Device.Infiniband"
+);
 empty_device_interface!(DeviceIpvlan, "org.freedesktop.NetworkManager.Device.Ipvlan");
 empty_device_interface!(DeviceLowpan, "org.freedesktop.NetworkManager.Device.Lowpan");
 empty_device_interface!(DeviceMacsec, "org.freedesktop.NetworkManager.Device.Macsec");
-empty_device_interface!(DeviceMacvlan, "org.freedesktop.NetworkManager.Device.Macvlan");
+empty_device_interface!(
+    DeviceMacvlan,
+    "org.freedesktop.NetworkManager.Device.Macvlan"
+);
 empty_device_interface!(DeviceModem, "org.freedesktop.NetworkManager.Device.Modem");
-empty_device_interface!(DeviceOlpcMesh, "org.freedesktop.NetworkManager.Device.OlpcMesh");
-empty_device_interface!(DeviceOvsBridge, "org.freedesktop.NetworkManager.Device.OvsBridge");
-empty_device_interface!(DeviceOvsInterface, "org.freedesktop.NetworkManager.Device.OvsInterface");
-empty_device_interface!(DeviceOvsPort, "org.freedesktop.NetworkManager.Device.OvsPort");
+empty_device_interface!(
+    DeviceOlpcMesh,
+    "org.freedesktop.NetworkManager.Device.OlpcMesh"
+);
+empty_device_interface!(
+    DeviceOvsBridge,
+    "org.freedesktop.NetworkManager.Device.OvsBridge"
+);
+empty_device_interface!(
+    DeviceOvsInterface,
+    "org.freedesktop.NetworkManager.Device.OvsInterface"
+);
+empty_device_interface!(
+    DeviceOvsPort,
+    "org.freedesktop.NetworkManager.Device.OvsPort"
+);
 empty_device_interface!(DevicePpp, "org.freedesktop.NetworkManager.Device.Ppp");
 empty_device_interface!(DeviceTun, "org.freedesktop.NetworkManager.Device.Tun");
 empty_device_interface!(DeviceVeth, "org.freedesktop.NetworkManager.Device.Veth");
@@ -204,7 +234,10 @@ impl DeviceWifiP2P {
         peer: OwnedObjectPath,
     ) -> zbus::Result<()>;
 
-    fn start_find(&self, _options: std::collections::HashMap<String, zbus::zvariant::OwnedValue>) -> fdo::Result<()> {
+    fn start_find(
+        &self,
+        _options: std::collections::HashMap<String, zbus::zvariant::OwnedValue>,
+    ) -> fdo::Result<()> {
         Ok(())
     }
 
@@ -526,9 +559,7 @@ pub async fn unregister_device_aux_interfaces(
     kind: Kind,
     type_: Type,
 ) {
-    let _ = server
-        .remove::<DeviceStatistics, _>(path.as_str())
-        .await;
+    let _ = server.remove::<DeviceStatistics, _>(path.as_str()).await;
 
     match kind {
         Kind::Bond => {
@@ -613,7 +644,12 @@ pub async fn unregister_device_aux_interfaces(
         _ => {}
     }
 
-    if path.as_str().rsplit('/').next().is_some_and(|segment| segment.starts_with("ppp")) {
+    if path
+        .as_str()
+        .rsplit('/')
+        .next()
+        .is_some_and(|segment| segment.starts_with("ppp"))
+    {
         let _ = server.remove::<DevicePpp, _>(path.as_str()).await;
         let _ = server
             .remove::<crate::network_manager::ppp::Ppp, _>(path.as_str())

@@ -75,16 +75,24 @@ impl Device {
         #[zbus(object_server)] server: &ObjectServer,
         #[zbus(connection)] _bus: &Connection,
     ) -> fdo::Result<()> {
-        let output = tokio::process::Command::new(crate::network_manager::networkctl_bin())
-            .arg("delete")
-            .arg(&self.interface)
-            .output()
-            .await
-            .map_err(|error| fdo::Error::Failed(error.to_string()))?;
-        if !output.status.success() {
-            return Err(fdo::Error::Failed(
-                String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            ));
+        if let Some(result) = crate::network_manager::maybe_run_link_operation_override(
+            crate::network_manager::LinkOperation::Delete,
+            &self.interface,
+        ) {
+            result.map_err(fdo::Error::Failed)?;
+        } else {
+            let (connection, handle, _) = rtnetlink::new_connection()
+                .map_err(|error| fdo::Error::Failed(error.to_string()))?;
+            tokio::spawn(connection);
+            let index = crate::network_manager::link_index_by_name(&handle, &self.interface)
+                .await
+                .map_err(fdo::Error::Failed)?;
+            handle
+                .link()
+                .del(index)
+                .execute()
+                .await
+                .map_err(|error| fdo::Error::Failed(error.to_string()))?;
         }
 
         for connection in self.runtime.connections_for_interface(&self.interface) {
@@ -104,26 +112,23 @@ impl Device {
         #[zbus(object_server)] server: &ObjectServer,
         #[zbus(connection)] bus: &Connection,
     ) -> fdo::Result<()> {
-        let Some(active_connection) = self.runtime.active_connection_for_interface(&self.interface) else {
+        let Some(active_connection) = self
+            .runtime
+            .active_connection_for_interface(&self.interface)
+        else {
             return Ok(());
         };
         if let Some(record) = self.runtime.active_connection(&active_connection) {
             match record.value.type_.as_str() {
-                "802-11-wireless" => crate::network_manager::deactivate_wifi_connection(&self.interface)
-                    .await
-                    .map_err(fdo::Error::Failed)?,
-                "802-3-ethernet" => {
-                    let output = tokio::process::Command::new(crate::network_manager::networkctl_bin())
-                        .arg("down")
-                        .arg(&self.interface)
-                        .output()
+                "802-11-wireless" => {
+                    crate::network_manager::deactivate_wifi_connection(&self.interface)
                         .await
-                        .map_err(|error| fdo::Error::Failed(error.to_string()))?;
-                    if !output.status.success() {
-                        return Err(fdo::Error::Failed(
-                            String::from_utf8_lossy(&output.stderr).trim().to_string(),
-                        ));
-                    }
+                        .map_err(fdo::Error::Failed)?
+                }
+                "802-3-ethernet" => {
+                    crate::network_manager::deactivate_wired_connection(&self.interface)
+                        .await
+                        .map_err(fdo::Error::Failed)?;
                 }
                 _ => {}
             }
@@ -466,7 +471,11 @@ impl Device {
     /// State property
     #[zbus(property)]
     fn state(&self) -> u32 {
-        if self.runtime.active_connection_for_interface(&self.interface).is_some() {
+        if self
+            .runtime
+            .active_connection_for_interface(&self.interface)
+            .is_some()
+        {
             NMDeviceState::Activated as u32
         } else {
             self.state as u32
@@ -476,8 +485,15 @@ impl Device {
     /// `StateReason` property
     #[zbus(property)]
     fn state_reason(&self) -> (u32, u32) {
-        if self.runtime.active_connection_for_interface(&self.interface).is_some() {
-            (NMDeviceState::Activated as u32, NMDeviceStateReason::None as u32)
+        if self
+            .runtime
+            .active_connection_for_interface(&self.interface)
+            .is_some()
+        {
+            (
+                NMDeviceState::Activated as u32,
+                NMDeviceStateReason::None as u32,
+            )
         } else {
             (self.state_reason.0 as u32, self.state_reason.1 as u32)
         }
@@ -496,10 +512,7 @@ async fn emit_device_property_changed(
     property: &str,
     value: Value<'static>,
 ) -> zbus::Result<()> {
-    let emitter = SignalEmitter::new(
-        bus,
-        crate::device_object_path(interface_name),
-    )?;
+    let emitter = SignalEmitter::new(bus, crate::device_object_path(interface_name))?;
     Properties::properties_changed(
         &emitter,
         InterfaceName::try_from("org.freedesktop.NetworkManager.Device")

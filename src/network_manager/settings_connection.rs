@@ -206,7 +206,9 @@ impl SettingsConnection {
     ) -> fdo::Result<HashMap<String, zbus::zvariant::OwnedValue>> {
         let allowed_flags = 0x1_u32 | 0x2_u32 | 0x4_u32 | 0x8_u32 | 0x10_u32 | 0x40_u32;
         if flags & !allowed_flags != 0 {
-            return Err(fdo::Error::InvalidArgs(String::from("unknown Update2 flags")));
+            return Err(fdo::Error::InvalidArgs(String::from(
+                "unknown Update2 flags",
+            )));
         }
         let connection = self
             .runtime
@@ -326,7 +328,8 @@ pub(crate) async fn persist_runtime_connection(
         .ok_or_else(|| String::from("unknown connection"))?;
     let mut updated = connection.clone();
     persist_prepared_connection(&connection, &mut updated).await?;
-    apply_runtime_connection(runtime, path, updated).ok_or_else(|| String::from("unknown connection"))?;
+    apply_runtime_connection(runtime, path, updated)
+        .ok_or_else(|| String::from("unknown connection"))?;
     Ok(())
 }
 

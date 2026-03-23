@@ -49,7 +49,8 @@ impl Settings {
         #[zbus(object_server)] server: &ObjectServer,
         #[zbus(connection)] bus: &Connection,
     ) -> fdo::Result<OwnedObjectPath> {
-        self.add_connection_inner(connection, false, server, bus).await
+        self.add_connection_inner(connection, false, server, bus)
+            .await
     }
 
     async fn add_connection_unsaved(
@@ -58,7 +59,8 @@ impl Settings {
         #[zbus(object_server)] server: &ObjectServer,
         #[zbus(connection)] bus: &Connection,
     ) -> fdo::Result<OwnedObjectPath> {
-        self.add_connection_inner(connection, true, server, bus).await
+        self.add_connection_inner(connection, true, server, bus)
+            .await
     }
 
     async fn add_connection2(
@@ -92,7 +94,10 @@ impl Settings {
             connection
                 .entry(String::from("connection"))
                 .or_default()
-                .insert(String::from("autoconnect"), zbus::zvariant::OwnedValue::from(false));
+                .insert(
+                    String::from("autoconnect"),
+                    zbus::zvariant::OwnedValue::from(false),
+                );
         }
         let path = self
             .add_connection_inner(connection, !persist, server, bus)
@@ -135,7 +140,8 @@ impl Settings {
         if !imported.0 {
             return false;
         }
-        self.prune_missing_user_connections(&files, server, bus).await;
+        self.prune_missing_user_connections(&files, server, bus)
+            .await;
         let Ok(builder) = zbus::conn::Builder::system() else {
             return false;
         };

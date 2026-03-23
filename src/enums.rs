@@ -236,10 +236,14 @@ impl From<(Kind, Type)> for NMDeviceType {
             (Kind::Bridge, _) => Self::Bridge,
             (Kind::Dummy, _) => Self::Dummy,
             (Kind::Hsr, _) => Self::Hsr,
-            (Kind::Geneve, _) | (Kind::Gre, _) | (Kind::Gretap, _) | (Kind::Ip6gre, _)
-            | (Kind::Ip6gretap, _) | (Kind::Ip6tnl, _) | (Kind::Ipip, _) | (Kind::Sit, _) => {
-                Self::IpTunnel
-            }
+            (Kind::Geneve, _)
+            | (Kind::Gre, _)
+            | (Kind::Gretap, _)
+            | (Kind::Ip6gre, _)
+            | (Kind::Ip6gretap, _)
+            | (Kind::Ip6tnl, _)
+            | (Kind::Ipip, _)
+            | (Kind::Sit, _) => Self::IpTunnel,
             (Kind::Ipvlan, _) => Self::Generic,
             (Kind::Lowpan, _) => Self::SixLowPan,
             (Kind::Macsec, _) => Self::MacSec,
@@ -322,17 +326,26 @@ mod tests {
 
     #[test]
     fn software_kinds_map_to_specific_device_types() {
-        assert_eq!(NMDeviceType::from((Kind::Bond, Type::Ether)), NMDeviceType::Bond);
+        assert_eq!(
+            NMDeviceType::from((Kind::Bond, Type::Ether)),
+            NMDeviceType::Bond
+        );
         assert_eq!(
             NMDeviceType::from((Kind::Bridge, Type::Ether)),
             NMDeviceType::Bridge
         );
-        assert_eq!(NMDeviceType::from((Kind::Dummy, Type::Ether)), NMDeviceType::Dummy);
+        assert_eq!(
+            NMDeviceType::from((Kind::Dummy, Type::Ether)),
+            NMDeviceType::Dummy
+        );
         assert_eq!(
             NMDeviceType::from((Kind::Macvlan, Type::Ether)),
             NMDeviceType::MacVlan
         );
-        assert_eq!(NMDeviceType::from((Kind::Tun, Type::None)), NMDeviceType::Tun);
+        assert_eq!(
+            NMDeviceType::from((Kind::Tun, Type::None)),
+            NMDeviceType::Tun
+        );
         assert_eq!(
             NMDeviceType::from((Kind::Wireguard, Type::None)),
             NMDeviceType::WireGuard

@@ -8,10 +8,12 @@ use std::{
 
 use anyhow::Result;
 use nm_dbus_proxy::{
-    Config, clear_config_override, set_config_override,
-    iwd::{BasicServiceSet, Device as IwdDevice, KnownNetwork, Network, OrderedNetwork, State as IwdState, Station},
-    start_service,
-    start_service_with_runtime,
+    Config, LinkOperation, clear_config_override, clear_link_operation_override,
+    iwd::{
+        BasicServiceSet, Device as IwdDevice, KnownNetwork, Network, OrderedNetwork,
+        State as IwdState, Station,
+    },
+    set_config_override, set_link_operation_override, start_service, start_service_with_runtime,
     sync_backends,
     systemd_networkd::{
         Manager,
@@ -26,7 +28,8 @@ use tokio::{
 use zbus::{
     Address as BusAddress,
     conn::Builder,
-    fdo::ObjectManagerProxy,
+    fdo::{ObjectManager, ObjectManagerProxy},
+    interface,
     names::OwnedInterfaceName,
     zvariant::{OwnedObjectPath, OwnedValue},
 };
@@ -40,10 +43,37 @@ fn test_lock() -> MutexGuard<'static, ()> {
         .expect("test lock poisoned")
 }
 
+struct LinkOperationOverrideGuard;
+
+impl Drop for LinkOperationOverrideGuard {
+    fn drop(&mut self) {
+        clear_link_operation_override();
+    }
+}
+
+fn install_link_operation_logger(log_path: PathBuf) -> LinkOperationOverrideGuard {
+    set_link_operation_override(move |operation, interface_name| {
+        let verb = match operation {
+            LinkOperation::Up => "up",
+            LinkOperation::Down => "down",
+            LinkOperation::Delete => "delete",
+        };
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .map_err(|error| error.to_string())?;
+        use std::io::Write as _;
+        writeln!(file, "{verb} {interface_name}").map_err(|error| error.to_string())
+    });
+    LinkOperationOverrideGuard
+}
+
 #[tokio::test]
 async fn network_manager_service_exposes_settings_and_object_manager() -> Result<()> {
     let _guard = test_lock();
     let (address, _daemon) = spawn_test_bus().await?;
+    let _iwd = start_fake_iwd_service(address.as_str(), fake_iwd_state()).await?;
     let client_bus = Builder::address(BusAddress::try_from(address.as_str())?)?
         .build()
         .await?;
@@ -64,8 +94,12 @@ async fn network_manager_service_exposes_settings_and_object_manager() -> Result
     let managed_objects = object_manager.get_managed_objects().await?;
     assert!(managed_objects.contains_key(&owned_path("/org/freedesktop/NetworkManager")));
     assert!(managed_objects.contains_key(&owned_path("/org/freedesktop/NetworkManager/Settings")));
-    assert!(managed_objects.contains_key(&owned_path("/org/freedesktop/NetworkManager/Settings/1")));
-    assert!(managed_objects.contains_key(&owned_path("/org/freedesktop/NetworkManager/Devices/eth0")));
+    assert!(
+        managed_objects.contains_key(&owned_path("/org/freedesktop/NetworkManager/Settings/1"))
+    );
+    assert!(
+        managed_objects.contains_key(&owned_path("/org/freedesktop/NetworkManager/Devices/eth0"))
+    );
 
     let settings_proxy = zbus::Proxy::new(
         &client_bus,
@@ -98,10 +132,8 @@ async fn network_manager_service_exposes_settings_and_object_manager() -> Result
         "org.freedesktop.NetworkManager.Settings.Connection",
     )
     .await?;
-    let settings: std::collections::HashMap<
-        String,
-        std::collections::HashMap<String, OwnedValue>,
-    > = connection_proxy.call("GetSettings", &()).await?;
+    let settings: std::collections::HashMap<String, std::collections::HashMap<String, OwnedValue>> =
+        connection_proxy.call("GetSettings", &()).await?;
     assert!(settings.contains_key("connection"));
 
     Ok(())
@@ -115,52 +147,22 @@ async fn mutating_apis_work_for_wifi_and_wired() -> Result<()> {
     let network_dir = temp_dir.join("networkd");
     let hostname_path = temp_dir.join("hostname");
     let resolv_conf_path = temp_dir.join("resolv.conf");
-    let iwctl_log = temp_dir.join("iwctl.log");
-    let networkctl_log = temp_dir.join("networkctl.log");
+    let link_operation_log = temp_dir.join("link-operation.log");
     tokio::fs::create_dir_all(&iwd_dir).await?;
     tokio::fs::create_dir_all(&network_dir).await?;
     write(&resolv_conf_path, "nameserver 9.9.9.9\n").await?;
-
-    let iwctl_path = temp_dir.join("fake-iwctl.sh");
-    let networkctl_path = temp_dir.join("fake-networkctl.sh");
-    write(
-        &iwctl_path,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\nexit 0\n",
-            iwctl_log.display()
-        ),
-    )
-    .await?;
-    write(
-        &networkctl_path,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\nexit 0\n",
-            networkctl_log.display()
-        ),
-    )
-    .await?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = tokio::fs::metadata(&iwctl_path).await?.permissions();
-        perms.set_mode(0o755);
-        tokio::fs::set_permissions(&iwctl_path, perms).await?;
-        let mut perms = tokio::fs::metadata(&networkctl_path).await?.permissions();
-        perms.set_mode(0o755);
-        tokio::fs::set_permissions(&networkctl_path, perms).await?;
-    }
+    let _link_override = install_link_operation_logger(link_operation_log.clone());
 
     set_config_override(Config {
         hostname_path,
         iwd_state_dir: iwd_dir.clone(),
-        iwctl_bin: iwctl_path.display().to_string(),
         network_dir: network_dir.clone(),
-        networkctl_bin: networkctl_path.display().to_string(),
         resolv_conf_path,
         ..Config::default()
     });
 
     let (address, _daemon) = spawn_test_bus().await?;
+    let _iwd = start_fake_iwd_service(address.as_str(), fake_iwd_state()).await?;
     let client_bus = Builder::address(BusAddress::try_from(address.as_str())?)?
         .build()
         .await?;
@@ -194,7 +196,7 @@ async fn mutating_apis_work_for_wifi_and_wired() -> Result<()> {
     .await?;
 
     let connections: Vec<OwnedObjectPath> = settings_proxy.call("ListConnections", &()).await?;
-    let wifi_connection = connections
+    let _wifi_connection = connections
         .iter()
         .find(|path| path.as_str().ends_with("/1"))
         .expect("wifi connection should exist")
@@ -261,16 +263,17 @@ async fn mutating_apis_work_for_wifi_and_wired() -> Result<()> {
         ),
     ]);
     eprintln!("step: add-and-activate");
-    let (new_connection_path, new_active_path): (OwnedObjectPath, OwnedObjectPath) = network_manager
-        .call(
-            "AddAndActivateConnection",
-            &(
-                new_wifi.clone(),
-                owned_path("/org/freedesktop/NetworkManager/Devices/wlan0"),
-                owned_path("/"),
-            ),
-        )
-        .await?;
+    let (new_connection_path, new_active_path): (OwnedObjectPath, OwnedObjectPath) =
+        network_manager
+            .call(
+                "AddAndActivateConnection",
+                &(
+                    new_wifi.clone(),
+                    owned_path("/org/freedesktop/NetworkManager/Devices/wlan0"),
+                    owned_path("/"),
+                ),
+            )
+            .await?;
     assert!(new_connection_path.as_str().contains("/Settings/"));
     assert_eq!(
         new_active_path,
@@ -278,9 +281,14 @@ async fn mutating_apis_work_for_wifi_and_wired() -> Result<()> {
     );
 
     let active_connections: Vec<OwnedObjectPath> = manager_properties
-        .call("Get", &("org.freedesktop.NetworkManager", "ActiveConnections"))
+        .call(
+            "Get",
+            &("org.freedesktop.NetworkManager", "ActiveConnections"),
+        )
         .await
-        .and_then(|value: OwnedValue| Vec::<OwnedObjectPath>::try_from(value).map_err(Into::into))?;
+        .and_then(|value: OwnedValue| {
+            Vec::<OwnedObjectPath>::try_from(value).map_err(Into::into)
+        })?;
     assert!(active_connections.contains(&new_active_path));
 
     let device_proxy = zbus::Proxy::new(
@@ -334,9 +342,14 @@ async fn mutating_apis_work_for_wifi_and_wired() -> Result<()> {
     eprintln!("step: disconnect");
     let _: () = device_proxy.call("Disconnect", &()).await?;
     let active_after_disconnect: Vec<OwnedObjectPath> = manager_properties
-        .call("Get", &("org.freedesktop.NetworkManager", "ActiveConnections"))
+        .call(
+            "Get",
+            &("org.freedesktop.NetworkManager", "ActiveConnections"),
+        )
         .await
-        .and_then(|value: OwnedValue| Vec::<OwnedObjectPath>::try_from(value).map_err(Into::into))?;
+        .and_then(|value: OwnedValue| {
+            Vec::<OwnedObjectPath>::try_from(value).map_err(Into::into)
+        })?;
     assert!(!active_after_disconnect.contains(&new_active_path));
 
     eprintln!("step: wired-activate");
@@ -373,7 +386,9 @@ async fn mutating_apis_work_for_wifi_and_wired() -> Result<()> {
     let checkpoints: Vec<OwnedObjectPath> = manager_properties
         .call("Get", &("org.freedesktop.NetworkManager", "Checkpoints"))
         .await
-        .and_then(|value: OwnedValue| Vec::<OwnedObjectPath>::try_from(value).map_err(Into::into))?;
+        .and_then(|value: OwnedValue| {
+            Vec::<OwnedObjectPath>::try_from(value).map_err(Into::into)
+        })?;
     assert!(checkpoints.contains(&checkpoint_path));
 
     new_wifi
@@ -391,12 +406,9 @@ async fn mutating_apis_work_for_wifi_and_wired() -> Result<()> {
         Some(&0_u32)
     );
 
-    let iwctl_log_contents = tokio::fs::read_to_string(&iwctl_log).await?;
-    let networkctl_log_contents = tokio::fs::read_to_string(&networkctl_log).await?;
-    assert!(iwctl_log_contents.contains("station wlan0 connect new-wifi psk"));
-    assert!(iwctl_log_contents.contains("station wlan0 disconnect"));
-    assert!(networkctl_log_contents.contains("up eth0"));
-    assert!(networkctl_log_contents.contains("down eth0"));
+    let link_operation_log_contents = tokio::fs::read_to_string(&link_operation_log).await?;
+    assert!(link_operation_log_contents.contains("up eth0"));
+    assert!(link_operation_log_contents.contains("down eth0"));
 
     clear_config_override();
     Ok(())
@@ -423,6 +435,7 @@ async fn root_properties_and_connection_flags_are_mutable() -> Result<()> {
     });
 
     let (address, _daemon) = spawn_test_bus().await?;
+    let _iwd = start_fake_iwd_service(address.as_str(), fake_iwd_state()).await?;
     let client_bus = Builder::address(BusAddress::try_from(address.as_str())?)?
         .build()
         .await?;
@@ -458,7 +471,9 @@ async fn root_properties_and_connection_flags_are_mutable() -> Result<()> {
     let (level, domains): (String, String) = network_manager.call("GetLogging", &()).await?;
     assert_eq!(level, "INFO");
     assert_eq!(domains, "DEFAULT");
-    let _: () = network_manager.call("SetLogging", &("TRACE", "WIFI")).await?;
+    let _: () = network_manager
+        .call("SetLogging", &("TRACE", "WIFI"))
+        .await?;
     let (level, domains): (String, String) = network_manager.call("GetLogging", &()).await?;
     assert_eq!(level, "TRACE");
     assert_eq!(domains, "WIFI");
@@ -474,7 +489,10 @@ async fn root_properties_and_connection_flags_are_mutable() -> Result<()> {
         )
         .await?;
     let wireless_enabled: OwnedValue = manager_props
-        .call("Get", &("org.freedesktop.NetworkManager", "WirelessEnabled"))
+        .call(
+            "Get",
+            &("org.freedesktop.NetworkManager", "WirelessEnabled"),
+        )
         .await?;
     assert!(!bool::try_from(wireless_enabled)?);
 
@@ -491,10 +509,7 @@ async fn root_properties_and_connection_flags_are_mutable() -> Result<()> {
     let connectivity_check_enabled: OwnedValue = manager_props
         .call(
             "Get",
-            &(
-                "org.freedesktop.NetworkManager",
-                "ConnectivityCheckEnabled",
-            ),
+            &("org.freedesktop.NetworkManager", "ConnectivityCheckEnabled"),
         )
         .await?;
     assert!(bool::try_from(connectivity_check_enabled)?);
@@ -530,13 +545,23 @@ async fn root_properties_and_connection_flags_are_mutable() -> Result<()> {
                 (String::from("autoconnect"), OwnedValue::from(true)),
             ]),
         ),
-        (String::from("802-3-ethernet"), std::collections::HashMap::new()),
+        (
+            String::from("802-3-ethernet"),
+            std::collections::HashMap::new(),
+        ),
     ]);
 
-    let invalid_add: zbus::Result<(OwnedObjectPath, std::collections::HashMap<String, OwnedValue>)> =
-        settings_proxy.call(
+    let invalid_add: zbus::Result<(
+        OwnedObjectPath,
+        std::collections::HashMap<String, OwnedValue>,
+    )> = settings_proxy
+        .call(
             "AddConnection2",
-            &(new_connection.clone(), 0_u32, std::collections::HashMap::<String, OwnedValue>::new()),
+            &(
+                new_connection.clone(),
+                0_u32,
+                std::collections::HashMap::<String, OwnedValue>::new(),
+            ),
         )
         .await;
     assert!(invalid_add.is_err());
@@ -547,7 +572,11 @@ async fn root_properties_and_connection_flags_are_mutable() -> Result<()> {
     ) = settings_proxy
         .call(
             "AddConnection2",
-            &(new_connection.clone(), 0x2_u32, std::collections::HashMap::<String, OwnedValue>::new()),
+            &(
+                new_connection.clone(),
+                0x2_u32,
+                std::collections::HashMap::<String, OwnedValue>::new(),
+            ),
         )
         .await?;
 
@@ -596,7 +625,11 @@ async fn root_properties_and_connection_flags_are_mutable() -> Result<()> {
     let _: std::collections::HashMap<String, OwnedValue> = connection_proxy
         .call(
             "Update2",
-            &(updated_connection, 0x1_u32, std::collections::HashMap::<String, OwnedValue>::new()),
+            &(
+                updated_connection,
+                0x1_u32,
+                std::collections::HashMap::<String, OwnedValue>::new(),
+            ),
         )
         .await?;
     let unsaved: OwnedValue = connection_props
@@ -629,6 +662,7 @@ async fn root_properties_and_connection_flags_are_mutable() -> Result<()> {
 async fn software_devices_expose_specialized_interfaces() -> Result<()> {
     let _guard = test_lock();
     let (address, _daemon) = spawn_test_bus().await?;
+    let _iwd = start_fake_iwd_service(address.as_str(), fake_iwd_state()).await?;
     let client_bus = Builder::address(BusAddress::try_from(address.as_str())?)?
         .build()
         .await?;
@@ -674,6 +708,7 @@ async fn software_devices_expose_specialized_interfaces() -> Result<()> {
 async fn backend_sync_adds_and_removes_devices() -> Result<()> {
     let _guard = test_lock();
     let (address, _daemon) = spawn_test_bus().await?;
+    let _iwd = start_fake_iwd_service(address.as_str(), fake_iwd_state()).await?;
     let client_bus = Builder::address(BusAddress::try_from(address.as_str())?)?
         .build()
         .await?;
@@ -685,8 +720,13 @@ async fn backend_sync_adds_and_removes_devices() -> Result<()> {
     )
     .await?;
 
-    sync_backends(&service_bus, &runtime, fake_manager_with_software_links(), fake_iwd_state())
-        .await?;
+    sync_backends(
+        &service_bus,
+        &runtime,
+        fake_manager_with_software_links(),
+        fake_iwd_state(),
+    )
+    .await?;
 
     let object_manager = ObjectManagerProxy::builder(&client_bus)
         .destination("org.freedesktop.NetworkManager")?
@@ -694,12 +734,12 @@ async fn backend_sync_adds_and_removes_devices() -> Result<()> {
         .build()
         .await?;
     let mut managed_objects = object_manager.get_managed_objects().await?;
-    assert!(managed_objects.contains_key(&owned_path(
-        "/org/freedesktop/NetworkManager/Devices/br0"
-    )));
-    assert!(managed_objects.contains_key(&owned_path(
-        "/org/freedesktop/NetworkManager/Devices/wg0"
-    )));
+    assert!(
+        managed_objects.contains_key(&owned_path("/org/freedesktop/NetworkManager/Devices/br0"))
+    );
+    assert!(
+        managed_objects.contains_key(&owned_path("/org/freedesktop/NetworkManager/Devices/wg0"))
+    );
 
     let manager_props = zbus::Proxy::new(
         &client_bus,
@@ -712,25 +752,21 @@ async fn backend_sync_adds_and_removes_devices() -> Result<()> {
         .call("Get", &("org.freedesktop.NetworkManager", "Devices"))
         .await?;
     let devices = Vec::<OwnedObjectPath>::try_from(devices)?;
-    assert!(devices.contains(&owned_path(
-        "/org/freedesktop/NetworkManager/Devices/br0"
-    )));
+    assert!(devices.contains(&owned_path("/org/freedesktop/NetworkManager/Devices/br0")));
 
     sync_backends(&service_bus, &runtime, fake_manager(), fake_iwd_state()).await?;
     managed_objects = object_manager.get_managed_objects().await?;
-    assert!(!managed_objects.contains_key(&owned_path(
-        "/org/freedesktop/NetworkManager/Devices/br0"
-    )));
-    assert!(!managed_objects.contains_key(&owned_path(
-        "/org/freedesktop/NetworkManager/Devices/wg0"
-    )));
+    assert!(
+        !managed_objects.contains_key(&owned_path("/org/freedesktop/NetworkManager/Devices/br0"))
+    );
+    assert!(
+        !managed_objects.contains_key(&owned_path("/org/freedesktop/NetworkManager/Devices/wg0"))
+    );
     let devices: OwnedValue = manager_props
         .call("Get", &("org.freedesktop.NetworkManager", "Devices"))
         .await?;
     let devices = Vec::<OwnedObjectPath>::try_from(devices)?;
-    assert!(!devices.contains(&owned_path(
-        "/org/freedesktop/NetworkManager/Devices/br0"
-    )));
+    assert!(!devices.contains(&owned_path("/org/freedesktop/NetworkManager/Devices/br0")));
 
     Ok(())
 }
@@ -756,6 +792,7 @@ async fn checkpoint_rollback_restores_persisted_profiles() -> Result<()> {
     });
 
     let (address, _daemon) = spawn_test_bus().await?;
+    let _iwd = start_fake_iwd_service(address.as_str(), fake_iwd_state()).await?;
     let client_bus = Builder::address(BusAddress::try_from(address.as_str())?)?
         .build()
         .await?;
@@ -795,8 +832,10 @@ async fn checkpoint_rollback_restores_persisted_profiles() -> Result<()> {
                 ),
                 (
                     String::from("id"),
-                    OwnedValue::try_from(zbus::zvariant::Value::from(String::from("rollback-wifi")))
-                        .expect("id fits"),
+                    OwnedValue::try_from(zbus::zvariant::Value::from(String::from(
+                        "rollback-wifi",
+                    )))
+                    .expect("id fits"),
                 ),
                 (
                     String::from("type"),
@@ -841,7 +880,10 @@ async fn checkpoint_rollback_restores_persisted_profiles() -> Result<()> {
         .call("AddConnection", &(wifi_connection.clone(),))
         .await?;
     let checkpoint_path: OwnedObjectPath = network_manager
-        .call("CheckpointCreate", &(Vec::<OwnedObjectPath>::new(), 30_u32, 0_u32))
+        .call(
+            "CheckpointCreate",
+            &(Vec::<OwnedObjectPath>::new(), 30_u32, 0_u32),
+        )
         .await?;
 
     let connection_proxy = zbus::Proxy::new(
@@ -893,6 +935,7 @@ async fn checkpoint_timeout_rolls_back_automatically() -> Result<()> {
     });
 
     let (address, _daemon) = spawn_test_bus().await?;
+    let _iwd = start_fake_iwd_service(address.as_str(), fake_iwd_state()).await?;
     let client_bus = Builder::address(BusAddress::try_from(address.as_str())?)?
         .build()
         .await?;
@@ -968,8 +1011,10 @@ async fn checkpoint_timeout_rolls_back_automatically() -> Result<()> {
                 ),
                 (
                     String::from("psk"),
-                    OwnedValue::try_from(zbus::zvariant::Value::from(String::from("timeoutsecret")))
-                        .expect("psk fits"),
+                    OwnedValue::try_from(zbus::zvariant::Value::from(String::from(
+                        "timeoutsecret",
+                    )))
+                    .expect("psk fits"),
                 ),
             ]),
         ),
@@ -978,7 +1023,10 @@ async fn checkpoint_timeout_rolls_back_automatically() -> Result<()> {
         .call("AddConnection", &(wifi_connection.clone(),))
         .await?;
     let checkpoint_path: OwnedObjectPath = network_manager
-        .call("CheckpointCreate", &(Vec::<OwnedObjectPath>::new(), 1_u32, 0_u32))
+        .call(
+            "CheckpointCreate",
+            &(Vec::<OwnedObjectPath>::new(), 1_u32, 0_u32),
+        )
         .await?;
     let checkpoint_proxy = zbus::Proxy::new(
         &client_bus,
@@ -1026,6 +1074,7 @@ async fn checkpoint_timeout_rolls_back_automatically() -> Result<()> {
 async fn p2p_devices_expose_wifi_p2p_interface() -> Result<()> {
     let _guard = test_lock();
     let (address, _daemon) = spawn_test_bus().await?;
+    let _iwd = start_fake_iwd_service(address.as_str(), fake_iwd_state_with_p2p_peer()).await?;
     let client_bus = Builder::address(BusAddress::try_from(address.as_str())?)?
         .build()
         .await?;
@@ -1044,7 +1093,9 @@ async fn p2p_devices_expose_wifi_p2p_interface() -> Result<()> {
         .await?;
     let managed_objects = object_manager.get_managed_objects().await?;
     let p2p = managed_objects
-        .get(&owned_path("/org/freedesktop/NetworkManager/Devices/p2p_2ddev_2dwlan0"))
+        .get(&owned_path(
+            "/org/freedesktop/NetworkManager/Devices/p2p_2ddev_2dwlan0",
+        ))
         .expect("p2p device should exist");
     assert!(p2p.contains_key(&OwnedInterfaceName::try_from(
         "org.freedesktop.NetworkManager.Device.WifiP2P"
@@ -1076,38 +1127,22 @@ async fn vpn_active_connections_expose_vpn_connection_interface() -> Result<()> 
     let network_dir = temp_dir.join("networkd");
     let hostname_path = temp_dir.join("hostname");
     let resolv_conf_path = temp_dir.join("resolv.conf");
-    let networkctl_log = temp_dir.join("networkctl.log");
+    let link_operation_log = temp_dir.join("link-operation.log");
     tokio::fs::create_dir_all(&iwd_dir).await?;
     tokio::fs::create_dir_all(&network_dir).await?;
     write(&resolv_conf_path, "nameserver 9.9.9.9\n").await?;
-
-    let networkctl_path = temp_dir.join("fake-networkctl.sh");
-    write(
-        &networkctl_path,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\nexit 0\n",
-            networkctl_log.display()
-        ),
-    )
-    .await?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = tokio::fs::metadata(&networkctl_path).await?.permissions();
-        perms.set_mode(0o755);
-        tokio::fs::set_permissions(&networkctl_path, perms).await?;
-    }
+    let _link_override = install_link_operation_logger(link_operation_log);
 
     set_config_override(Config {
         hostname_path,
         iwd_state_dir: iwd_dir,
         network_dir,
-        networkctl_bin: networkctl_path.display().to_string(),
         resolv_conf_path,
         ..Config::default()
     });
 
     let (address, _daemon) = spawn_test_bus().await?;
+    let _iwd = start_fake_iwd_service(address.as_str(), fake_iwd_state()).await?;
     let client_bus = Builder::address(BusAddress::try_from(address.as_str())?)?
         .build()
         .await?;
@@ -1200,6 +1235,7 @@ async fn vpn_active_connections_expose_vpn_connection_interface() -> Result<()> 
 async fn vpn_plugin_object_is_exposed() -> Result<()> {
     let _guard = test_lock();
     let (address, _daemon) = spawn_test_bus().await?;
+    let _iwd = start_fake_iwd_service(address.as_str(), fake_iwd_state()).await?;
     let client_bus = Builder::address(BusAddress::try_from(address.as_str())?)?
         .build()
         .await?;
@@ -1233,7 +1269,13 @@ async fn vpn_plugin_object_is_exposed() -> Result<()> {
     let state: u32 = plugin_proxy.get_property("State").await?;
     assert_eq!(state, 0);
     let _: () = plugin_proxy
-        .call("Connect", &(std::collections::HashMap::<String, std::collections::HashMap<String, OwnedValue>>::new(),))
+        .call(
+            "Connect",
+            &(std::collections::HashMap::<
+                String,
+                std::collections::HashMap<String, OwnedValue>,
+            >::new(),),
+        )
         .await?;
     let _: () = plugin_proxy.call("Disconnect", &()).await?;
     let state: u32 = plugin_proxy.get_property("State").await?;
@@ -1246,6 +1288,7 @@ async fn vpn_plugin_object_is_exposed() -> Result<()> {
 async fn ppp_devices_expose_ppp_interfaces() -> Result<()> {
     let _guard = test_lock();
     let (address, _daemon) = spawn_test_bus().await?;
+    let _iwd = start_fake_iwd_service(address.as_str(), fake_iwd_state()).await?;
     let client_bus = Builder::address(BusAddress::try_from(address.as_str())?)?
         .build()
         .await?;
@@ -1280,6 +1323,7 @@ async fn ppp_devices_expose_ppp_interfaces() -> Result<()> {
 async fn typed_devices_expose_matching_specialized_interfaces() -> Result<()> {
     let _guard = test_lock();
     let (address, _daemon) = spawn_test_bus().await?;
+    let _iwd = start_fake_iwd_service(address.as_str(), fake_iwd_state()).await?;
     let client_bus = Builder::address(BusAddress::try_from(address.as_str())?)?
         .build()
         .await?;
@@ -1883,7 +1927,12 @@ async fn spawn_test_bus() -> Result<(String, CommandChild)> {
         .stdout(Stdio::piped())
         .spawn()?;
 
-    let reader = BufReader::new(daemon.stdout.take().expect("dbus-daemon should have stdout"));
+    let reader = BufReader::new(
+        daemon
+            .stdout
+            .take()
+            .expect("dbus-daemon should have stdout"),
+    );
     let address = reader
         .lines()
         .next_line()
@@ -1894,3 +1943,257 @@ async fn spawn_test_bus() -> Result<(String, CommandChild)> {
 }
 
 type CommandChild = tokio::process::Child;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FakeIwdBasicServiceSet {
+    address: String,
+}
+
+#[interface(name = "net.connman.iwd.BasicServiceSet")]
+impl FakeIwdBasicServiceSet {
+    #[zbus(property)]
+    fn address(&self) -> String {
+        self.address.clone()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FakeIwdDevice {
+    name: String,
+    address: String,
+    powered: bool,
+    adapter: OwnedObjectPath,
+    mode: String,
+}
+
+#[interface(name = "net.connman.iwd.Device")]
+impl FakeIwdDevice {
+    #[zbus(property)]
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    #[zbus(property)]
+    fn address(&self) -> String {
+        self.address.clone()
+    }
+
+    #[zbus(property)]
+    fn powered(&self) -> bool {
+        self.powered
+    }
+
+    #[zbus(property)]
+    fn adapter(&self) -> OwnedObjectPath {
+        self.adapter.clone()
+    }
+
+    #[zbus(property)]
+    fn mode(&self) -> String {
+        self.mode.clone()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FakeIwdKnownNetwork {
+    name: String,
+    type_: String,
+    hidden: bool,
+    auto_connect: bool,
+    last_connected_time: String,
+}
+
+#[interface(name = "net.connman.iwd.KnownNetwork")]
+impl FakeIwdKnownNetwork {
+    #[zbus(property)]
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    #[zbus(property)]
+    fn type_(&self) -> String {
+        self.type_.clone()
+    }
+
+    #[zbus(property)]
+    fn hidden(&self) -> bool {
+        self.hidden
+    }
+
+    #[zbus(property)]
+    fn auto_connect(&self) -> bool {
+        self.auto_connect
+    }
+
+    #[zbus(property)]
+    fn last_connected_time(&self) -> String {
+        self.last_connected_time.clone()
+    }
+
+    fn connect(&self, _station: OwnedObjectPath) {}
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FakeIwdNetwork {
+    name: String,
+    connected: bool,
+    device: OwnedObjectPath,
+    type_: String,
+    known_network: OwnedObjectPath,
+    extended_service_set: Vec<OwnedObjectPath>,
+}
+
+#[interface(name = "net.connman.iwd.Network")]
+impl FakeIwdNetwork {
+    #[zbus(property)]
+    fn name(&self) -> String {
+        self.name.clone()
+    }
+
+    #[zbus(property)]
+    fn connected(&self) -> bool {
+        self.connected
+    }
+
+    #[zbus(property)]
+    fn device(&self) -> OwnedObjectPath {
+        self.device.clone()
+    }
+
+    #[zbus(property)]
+    fn type_(&self) -> String {
+        self.type_.clone()
+    }
+
+    #[zbus(property)]
+    fn known_network(&self) -> OwnedObjectPath {
+        self.known_network.clone()
+    }
+
+    #[zbus(property)]
+    fn extended_service_set(&self) -> Vec<OwnedObjectPath> {
+        self.extended_service_set.clone()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct FakeIwdStation {
+    connected_network: OwnedObjectPath,
+    ordered_networks: Vec<(OwnedObjectPath, i16)>,
+    scanning: bool,
+    state: String,
+}
+
+#[interface(name = "net.connman.iwd.Station")]
+impl FakeIwdStation {
+    #[zbus(property)]
+    fn scanning(&self) -> bool {
+        self.scanning
+    }
+
+    #[zbus(property)]
+    fn state(&self) -> String {
+        self.state.clone()
+    }
+
+    #[zbus(property)]
+    fn connected_network(&self) -> OwnedObjectPath {
+        self.connected_network.clone()
+    }
+
+    fn get_ordered_networks(&self) -> Vec<(OwnedObjectPath, i16)> {
+        self.ordered_networks.clone()
+    }
+
+    fn scan(&self) {}
+
+    fn disconnect(&self) {}
+
+    fn connect_hidden_network(&self, _ssid: Vec<u8>) -> OwnedObjectPath {
+        OwnedObjectPath::default()
+    }
+}
+
+async fn start_fake_iwd_service(address: &str, state: IwdState) -> Result<zbus::Connection> {
+    let conn = Builder::address(BusAddress::try_from(address)?)?
+        .build()
+        .await?;
+    let server = conn.object_server();
+
+    for bss in state.basic_service_sets {
+        server
+            .at(
+                bss.path.as_str(),
+                FakeIwdBasicServiceSet {
+                    address: bss.address,
+                },
+            )
+            .await?;
+    }
+    for device in state.devices {
+        server
+            .at(
+                device.path.as_str(),
+                FakeIwdDevice {
+                    name: device.name,
+                    address: device.address,
+                    powered: device.powered,
+                    adapter: device.adapter,
+                    mode: device.mode,
+                },
+            )
+            .await?;
+    }
+    for known in state.known_networks {
+        server
+            .at(
+                known.path.as_str(),
+                FakeIwdKnownNetwork {
+                    name: known.name,
+                    type_: known.kind,
+                    hidden: known.hidden,
+                    auto_connect: known.auto_connect,
+                    last_connected_time: known.last_connected_time,
+                },
+            )
+            .await?;
+    }
+    for network in state.networks {
+        server
+            .at(
+                network.path.as_str(),
+                FakeIwdNetwork {
+                    name: network.name,
+                    connected: network.connected,
+                    device: network.device,
+                    type_: network.kind,
+                    known_network: network.known_network,
+                    extended_service_set: network.extended_service_set,
+                },
+            )
+            .await?;
+    }
+    for station in state.stations {
+        server
+            .at(
+                station.path.as_str(),
+                FakeIwdStation {
+                    connected_network: station
+                        .connected_network
+                        .unwrap_or_else(OwnedObjectPath::default),
+                    ordered_networks: station
+                        .ordered_networks
+                        .into_iter()
+                        .map(|network| (network.path, network.signal))
+                        .collect(),
+                    scanning: station.scanning,
+                    state: station.state,
+                },
+            )
+            .await?;
+    }
+
+    server.at("/", ObjectManager).await?;
+    conn.request_name("net.connman.iwd").await?;
+    Ok(conn)
+}

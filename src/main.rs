@@ -31,7 +31,8 @@ async fn main() -> Result<()> {
     let manager = Manager::request(&system_bus).await?;
     let wireless = IwdState::request(&system_bus).await.unwrap_or_default();
 
-    let (service_bus, runtime) = start_service_with_runtime(args.service_bus, manager, wireless).await?;
+    let (service_bus, runtime) =
+        start_service_with_runtime(args.service_bus, manager, wireless).await?;
     spawn_sync_task(service_bus.clone(), runtime);
 
     pending::<()>().await;

@@ -1,4 +1,8 @@
-use std::{collections::HashMap, env, path::{Path, PathBuf}};
+use std::{
+    collections::HashMap,
+    env,
+    path::{Path, PathBuf},
+};
 
 use tokio::fs;
 
@@ -32,7 +36,9 @@ pub async fn delete_persisted_connection(record: &ConnectionRecord) -> Result<()
         return Ok(());
     }
 
-    fs::remove_file(path).await.map_err(|error| error.to_string())
+    fs::remove_file(path)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 pub async fn discover_connection_files() -> Result<Vec<PathBuf>, String> {
@@ -85,8 +91,8 @@ pub async fn load_connection_from_path(path: &Path) -> Result<ConnectionRecord, 
         .map_err(|error| error.to_string())?;
 
     if path.extension().and_then(|value| value.to_str()) == Some("network") {
-        let interface_name = parse_network_value(&contents, "Match", "Name")
-            .unwrap_or_else(|| String::from("*"));
+        let interface_name =
+            parse_network_value(&contents, "Match", "Name").unwrap_or_else(|| String::from("*"));
         return Ok(ConnectionRecord {
             connection_type: String::from("802-3-ethernet"),
             filename,
@@ -97,18 +103,9 @@ pub async fn load_connection_from_path(path: &Path) -> Result<ConnectionRecord, 
                 (
                     String::from("connection"),
                     HashMap::from([
-                        (
-                            String::from("id"),
-                            owned(interface_name.clone()),
-                        ),
-                        (
-                            String::from("interface-name"),
-                            owned(interface_name),
-                        ),
-                        (
-                            String::from("type"),
-                            owned(String::from("802-3-ethernet")),
-                        ),
+                        (String::from("id"), owned(interface_name.clone())),
+                        (String::from("interface-name"), owned(interface_name)),
+                        (String::from("type"), owned(String::from("802-3-ethernet"))),
                         (
                             String::from("uuid"),
                             owned(format!("imported-{}", path.display())),
@@ -149,7 +146,10 @@ pub async fn load_connection_from_path(path: &Path) -> Result<ConnectionRecord, 
                 (String::from("id"), owned(ssid.clone())),
                 (
                     String::from("interface-name"),
-                    owned(env::var("NM_DBUS_PROXY_DEFAULT_WIFI_IFACE").unwrap_or_else(|_| String::from("wlan0"))),
+                    owned(
+                        env::var("NM_DBUS_PROXY_DEFAULT_WIFI_IFACE")
+                            .unwrap_or_else(|_| String::from("wlan0")),
+                    ),
                 ),
                 (String::from("type"), owned(String::from("802-11-wireless"))),
                 (String::from("uuid"), owned(uuid.clone())),
@@ -196,18 +196,13 @@ fn filename_for_connection(record: &ConnectionRecord) -> Result<PathBuf, String>
             };
             Ok(iwd_state_dir().join(format!("{}.{}", encode_iwd_name(&ssid), extension)))
         }
-        "802-3-ethernet" => Ok(networkd_config_dir().join(format!(
-            "90-nm-dbus-proxy-{}.network",
-            record.uuid
-        ))),
-        kind if netdev_kind_for_connection_type(kind).is_some() => Ok(networkd_config_dir().join(format!(
-            "90-nm-dbus-proxy-{}.netdev",
-            record.uuid
-        ))),
-        _ => Ok(networkd_config_dir().join(format!(
-            "90-nm-dbus-proxy-{}.network",
-            record.uuid
-        ))),
+        "802-3-ethernet" => {
+            Ok(networkd_config_dir().join(format!("90-nm-dbus-proxy-{}.network", record.uuid)))
+        }
+        kind if netdev_kind_for_connection_type(kind).is_some() => {
+            Ok(networkd_config_dir().join(format!("90-nm-dbus-proxy-{}.netdev", record.uuid)))
+        }
+        _ => Ok(networkd_config_dir().join(format!("90-nm-dbus-proxy-{}.network", record.uuid))),
     }
 }
 
@@ -215,7 +210,11 @@ fn wifi_profile(record: &ConnectionRecord) -> Result<String, String> {
     let mut out = String::from("[Settings]\n");
     out.push_str(&format!(
         "AutoConnect={}\n",
-        if record.autoconnect() { "true" } else { "false" }
+        if record.autoconnect() {
+            "true"
+        } else {
+            "false"
+        }
     ));
     if record.is_hidden() {
         out.push_str("Hidden=true\n");
@@ -245,8 +244,7 @@ fn netdev_profile(record: &ConnectionRecord) -> Result<String, String> {
     let interface_name = record
         .interface_name()
         .ok_or_else(|| String::from("networkd connection is missing interface-name"))?;
-    let kind = netdev_kind_for_connection_type(&record.connection_type)
-        .unwrap_or("dummy");
+    let kind = netdev_kind_for_connection_type(&record.connection_type).unwrap_or("dummy");
     Ok(format!("[NetDev]\nName={interface_name}\nKind={kind}\n"))
 }
 

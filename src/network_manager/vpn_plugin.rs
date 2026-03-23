@@ -53,10 +53,7 @@ impl VpnPlugin {
     ) -> zbus::Result<()>;
 
     #[zbus(signal, name = "Failure")]
-    pub(crate) async fn emit_failure(
-        emitter: &SignalEmitter<'_>,
-        reason: u32,
-    ) -> zbus::Result<()>;
+    pub(crate) async fn emit_failure(emitter: &SignalEmitter<'_>, reason: u32) -> zbus::Result<()>;
 
     async fn connect(
         &self,
@@ -141,7 +138,11 @@ impl VpnPlugin {
         Ok(())
     }
 
-    async fn set_failure(&self, _reason: &str, #[zbus(connection)] bus: &Connection) -> fdo::Result<()> {
+    async fn set_failure(
+        &self,
+        _reason: &str,
+        #[zbus(connection)] bus: &Connection,
+    ) -> fdo::Result<()> {
         *state_slot().lock().expect("vpn plugin mutex poisoned") = 0;
         let emitter = SignalEmitter::new(bus, "/org/freedesktop/NetworkManager/VPN/Plugin")
             .map_err(|error| fdo::Error::Failed(error.to_string()))?;
