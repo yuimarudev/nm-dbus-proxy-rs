@@ -483,13 +483,7 @@ pub async fn start_service_with_runtime(
                             hw_address: current_hardware_address,
                             perm_hw_address: permanent_hardware_address,
                             s390_subchannels: vec![],
-                            speed: link
-                                .bit_rates
-                                .0
-                                .max(link.bit_rates.1)
-                                .saturating_div(1_000_000)
-                                .try_into()
-                                .unwrap_or(u32::MAX),
+                            speed: wired_speed_mbps(link),
                         },
                     )
                     .await?;
@@ -1176,13 +1170,7 @@ async fn sync_device_object(
                         hw_address: current_hardware_address,
                         perm_hw_address: permanent_hardware_address,
                         s390_subchannels: vec![],
-                        speed: link
-                            .bit_rates
-                            .0
-                            .max(link.bit_rates.1)
-                            .saturating_div(1_000_000)
-                            .try_into()
-                            .unwrap_or(u32::MAX),
+                        speed: wired_speed_mbps(link),
                     },
                 )
                 .await?;
@@ -2288,6 +2276,15 @@ fn link_has_global_ipv6(link: &Link) -> bool {
 
 fn link_has_ipv4(link: &Link) -> bool {
     link.description.addresses.iter().any(|address| address.family == 2)
+}
+
+fn wired_speed_mbps(link: &Link) -> u32 {
+    link.bit_rates
+        .0
+        .max(link.bit_rates.1)
+        .saturating_div(1_000_000)
+        .try_into()
+        .unwrap_or(0)
 }
 
 fn link_is_active(link: &Link) -> bool {
