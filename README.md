@@ -27,16 +27,17 @@ This fork remains distributed under the Apache License 2.0; see [LICENSE](./LICE
 
 ## TODO
 
-- [x] automatically activate on-demand (when "installation" process is completed)
-- [ ] map enough NetworkManager to system-networkd for [cosmic-applets][4] to display one-off network status
-- [ ] map enough NetworkManager to system-networkd for [cosmic-greeter][5] to display one-off network status
-- [ ] map enough NetworkManager to system-networkd for [cosmic-applets][4] to display live network status
-- [ ] map enough NetworkManager to system-networkd for [cosmic-greeter][5] to display live network status
-- [ ] map enough NetworkManager to system-networkd for [cosmic-applets][4] to toggle airplane mode
-- [ ] map enough NetworkManager to system-networkd for [cosmic-applets][4] to toggle Wi-Fi
+- [x] automatically activate on-demand (when the installation steps are completed)
+- [x] expose core `NetworkManager` D-Bus objects and dynamic `ObjectManager` updates for devices, access points, active connections, settings, checkpoints, DNS, and IP/DHCP config objects
+- [x] support the main mutable settings flows currently implemented in this fork:
+  `AddConnection*`, `Update*`, `Delete`, `Save`, `ReloadConnections`, hostname save, activate/deactivate, device disconnect, Wi-Fi scan, enable/disable networking, sleep, and checkpoint create/rollback
+- [x] export additional compatibility interfaces that were previously missing:
+  `PPP`, `VPN.Connection`, `VPN.Plugin`, `Device.WifiP2P`, `WifiP2PPeer`, `Device.Statistics`, and a broad set of software/virtual `Device.*` interfaces
+- [x] keep devices, access points, settings, and active connections synchronized from `systemd-networkd` and `iwd` backends
+- [ ] replace synthetic or stubbed behavior with real backend mappings for `PPP`, `VPN.Plugin`, `VPN.Connection`, `WifiP2PPeer`, and many specialized `Device.*` interfaces
+- [ ] map remaining read-only NetworkManager semantics exactly to underlying backends such as [systemd-networkd][3], `iwd`, ModemManager, BlueZ, OVS, and related components
+- [ ] map remaining read-write NetworkManager semantics exactly to underlying backends such as [systemd-networkd][3], `iwd`, ModemManager, BlueZ, OVS, and related components
 - [ ] improve the installation process, i.e. provide scripts and/or distribution packages
-- [ ] every read-only NetworkManager API mapped to [systemd-networkd][3] underneath
-- [ ] every read+write NetworkManager API mapped to [systemd-networkd][3] underneath
 
 [1]: https://www.networkmanager.dev/
 [2]: https://systemd.io/
